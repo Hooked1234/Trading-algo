@@ -1,0 +1,43 @@
+# Immutable capability profile for the filing-insight lab sidecar.
+platform_toolsets:
+  api_server: []
+
+agent:
+  disabled_toolsets:
+    - browser
+    - clarify
+    - code_execution
+    - computer_use
+    - context_engine
+    - cronjob
+    - delegation
+    - discord
+    - discord_admin
+    - feishu_doc
+    - feishu_drive
+    - file
+    - homeassistant
+    - image_gen
+    - kanban
+    - memory
+    - project
+    - safe
+    - search
+    - session_search
+    - skills
+    - spotify
+    - terminal
+    - todo
+    - tts
+    - video
+    - video_gen
+    - vision
+    - web
+    - x_search
+    - yuanbao
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+
+mcp_servers: {}

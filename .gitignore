@@ -1,0 +1,27 @@
+.env
+.venv/
+.pytest_cache/
+.test-*/
+.diag-*/
+.test-cache/
+.hypothesis/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data/raw/
+data/market/
+data/reports/
+logs/
+.idea/
+.vscode/
+tmp/
+
+# Claude-Code-Worktrees und lokale Sitzungseinstellungen
+.claude/worktrees/
+.claude/settings.local.json

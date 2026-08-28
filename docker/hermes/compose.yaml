@@ -1,0 +1,40 @@
+name: event-trader-hermes
+
+services:
+  hermes-insight:
+    profiles: ["lab-only"]
+    image: nousresearch/hermes-agent:v2026.8.19
+    pull_policy: never
+    command: ["gateway", "run"]
+    restart: "no"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2.0
+    ports:
+      - "127.0.0.1:8642:8642"
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - type: bind
+        source: ${HERMES_STATE_DIR:?Set a dedicated Hermes state directory outside the repository}
+        target: /opt/data
+      - type: bind
+        source: ./config.yaml
+        target: /opt/data/config.yaml
+        read_only: true
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: ${HERMES_API_SERVER_KEY:?Set a dedicated Hermes API key of at least 8 characters}
+      API_SERVER_MODEL_NAME: hermes-insight
+    networks:
+      - hermes-insight-only
+
+networks:
+  hermes-insight-only:
+    driver: bridge
