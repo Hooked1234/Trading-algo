@@ -283,9 +283,7 @@ def test_insight_artifact_must_be_bound_to_the_evaluated_cases(
         build_backtest_run(cases, variant=BacktestVariant.AI, insight_artifact=artifact)
 
 
-def test_a_non_quant_run_requires_insights(
-    tmp_path, filing, long_insight, decision_time
-) -> None:
+def test_a_non_quant_run_requires_insights(tmp_path, filing, long_insight, decision_time) -> None:
     builder, coverage, _insight, state, _lake = _inputs(
         tmp_path, filing, long_insight, decision_time
     )

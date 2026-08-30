@@ -10,9 +10,7 @@ from event_trader.domain import Direction
 
 
 def _market(snapshot, **updates):
-    return snapshot.model_copy(
-        update={"market": snapshot.market.model_copy(update=updates)}
-    )
+    return snapshot.model_copy(update={"market": snapshot.market.model_copy(update=updates)})
 
 
 def test_gate_accepts_a_confirmed_long_candidate(snapshot, decision_time) -> None:

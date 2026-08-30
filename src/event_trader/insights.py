@@ -130,9 +130,7 @@ def build_insight_artifact(
     by_event: dict[str, NewsInsight] = {}
     for insight in insights:
         if insight.event_id in by_event:
-            raise InsightArtifactError(
-                f"duplicate insight for event {insight.event_id}"
-            )
+            raise InsightArtifactError(f"duplicate insight for event {insight.event_id}")
         by_event[insight.event_id] = insight
 
     records: list[InsightRecord] = []
@@ -170,10 +168,7 @@ def build_insight_artifact(
 
 def _validate_grounding(case: BacktestCase, insight: NewsInsight) -> None:
     filing = case.snapshot.filing
-    if (
-        insight.event_id != filing.event_id
-        or insight.accession_number != filing.accession_number
-    ):
+    if insight.event_id != filing.event_id or insight.accession_number != filing.accession_number:
         raise InsightArtifactError("insight and filing identity mismatch")
     if insight.status is InsightStatus.ABSTAIN:
         # An abstention deliberately carries no evidence to ground.

@@ -283,9 +283,7 @@ class HistoricalResearchCaseBuilder:
         coverage_records: Iterable[CoverageRecord],
         lag_minutes: int,
     ) -> tuple[CoverageRecord, ...]:
-        selected = tuple(
-            record for record in coverage_records if record.lag_minutes == lag_minutes
-        )
+        selected = tuple(record for record in coverage_records if record.lag_minutes == lag_minutes)
         record_ids = tuple(record.record_id for record in selected)
         if len(set(record_ids)) != len(record_ids):
             raise ResearchCaseIntegrityError("coverage selection contains duplicate record ids")
@@ -394,9 +392,7 @@ class HistoricalResearchCaseBuilder:
             market_data_live=False,
             halted=trading_state.halted is True,
             shortable=trading_state.short_enabled,
-            shortable_shares=(
-                trading_state.shortable_shares if trading_state.short_enabled else 0
-            ),
+            shortable_shares=(trading_state.shortable_shares if trading_state.short_enabled else 0),
             security_type="common_stock" if eligibility.common_stock is True else "other",
             us_listed=eligibility.us_listing is True,
         )
@@ -601,9 +597,7 @@ def _case_input_hash(
         "verified_document_sha256": sorted(document_hashes),
         "market": case.snapshot.market.model_dump(mode="json"),
         "entry_reprice": (
-            case.entry_reprice.model_dump(mode="json")
-            if case.entry_reprice is not None
-            else None
+            case.entry_reprice.model_dump(mode="json") if case.entry_reprice is not None else None
         ),
         "exit_points": [point.model_dump(mode="json") for point in case.exit_points],
         "portfolio": case.portfolio.model_dump(mode="json"),

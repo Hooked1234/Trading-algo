@@ -3,9 +3,7 @@ from datetime import timedelta
 from event_trader.warnings import LocalCriticalWarningSink
 
 
-async def test_local_warning_journal_is_durable_and_throttled(
-    tmp_path, decision_time
-) -> None:
+async def test_local_warning_journal_is_durable_and_throttled(tmp_path, decision_time) -> None:
     current = decision_time
 
     def clock():

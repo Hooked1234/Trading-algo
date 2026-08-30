@@ -44,9 +44,7 @@ class NonSubmittingShadowBroker:
         self.strategy_nav = strategy_nav
         self._clock = clock
 
-    def readiness(
-        self, _profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, _profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         return BrokerReadiness(
             account_id=self.account_id,
             checked_at=self._now(),
@@ -60,9 +58,7 @@ class NonSubmittingShadowBroker:
         )
 
     def submit(self, intent: OrderIntent) -> ExecutionReport:
-        raise ShadowSubmissionRefused(
-            f"shadow mode cannot submit order {intent.order_id!r}"
-        )
+        raise ShadowSubmissionRefused(f"shadow mode cannot submit order {intent.order_id!r}")
 
     def submit_order(self, intent: OrderIntent) -> ExecutionReport:
         return self.submit(intent)
@@ -117,9 +113,7 @@ class NonSubmittingShadowBroker:
 async def shadow_repricer(intent: OrderIntent) -> OrderIntent:
     """Repricing is unreachable in shadow mode; reaching it is a defect."""
 
-    raise ShadowSubmissionRefused(
-        f"shadow mode cannot reprice order {intent.order_id!r}"
-    )
+    raise ShadowSubmissionRefused(f"shadow mode cannot reprice order {intent.order_id!r}")
 
 
 async def shadow_pre_submit_guard(intent: OrderIntent) -> bool:

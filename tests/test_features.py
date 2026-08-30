@@ -80,8 +80,7 @@ def _valid_inputs(decision_time: datetime) -> FeatureInputs:
     history = [0.001 * ((index % 5) - 2) for index in range(20)]
     spy = [0.0005 * ((index % 5) - 2) for index in range(20)]
     same_slot_timestamps = tuple(
-        _XNYS.session_open(session).to_pydatetime().astimezone(UTC)
-        + (decision_time - opening)
+        _XNYS.session_open(session).to_pydatetime().astimezone(UTC) + (decision_time - opening)
         for session in _previous_sessions(decision_time, 20)
     )
     return FeatureInputs(
@@ -91,8 +90,7 @@ def _valid_inputs(decision_time: datetime) -> FeatureInputs:
         atr_five_minute_bars=atr,
         previous_daily_bars=daily,
         same_slot_volumes=[
-            PointInTimeVolume(timestamp=timestamp, value=1000)
-            for timestamp in same_slot_timestamps
+            PointInTimeVolume(timestamp=timestamp, value=1000) for timestamp in same_slot_timestamps
         ],
         asset_return_history=[
             PointInTimeReturn(timestamp=timestamp, value=value)
@@ -128,9 +126,8 @@ def _raw_one_minute_history(
         full_minutes = int((closing - opening).total_seconds() // 60)
         minute_count = 15 if session_index == 20 else full_minutes
         spy_step = Decimal("0.0005") * Decimal(session_index + 1)
-        asset_step = (
-            Decimal("0.0008") * Decimal(session_index + 1)
-            + Decimal("0.0001") * Decimal(session_index % 3)
+        asset_step = Decimal("0.0008") * Decimal(session_index + 1) + Decimal("0.0001") * Decimal(
+            session_index % 3
         )
         for minute in range(1, minute_count + 1):
             timestamp = opening + timedelta(minutes=minute)

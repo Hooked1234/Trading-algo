@@ -120,9 +120,7 @@ class SQLiteSingletonLease:
         return self._ttl
 
     async def acquire(self) -> bool:
-        return await self._store.acquire_lease(
-            self._name, holder=self._holder, ttl=self._ttl
-        )
+        return await self._store.acquire_lease(self._name, holder=self._holder, ttl=self._ttl)
 
     async def renew(self) -> bool:
         return await self.acquire()
@@ -267,9 +265,7 @@ class LocalTradingDaemon:
             if self.lease is not None:
                 tasks.append(
                     asyncio.create_task(
-                        self._supervise(
-                            "lease", timedelta(seconds=5), self._lease_tick, stop
-                        ),
+                        self._supervise("lease", timedelta(seconds=5), self._lease_tick, stop),
                         name="event-trader-lease",
                     )
                 )
@@ -380,9 +376,7 @@ class LocalTradingDaemon:
             ingested, errors = await self._poll_sec()
             critical.extend(errors)
 
-        entries_blocked = any(
-            error.startswith(_ENTRY_BLOCKING_PREFIXES) for error in critical
-        )
+        entries_blocked = any(error.startswith(_ENTRY_BLOCKING_PREFIXES) for error in critical)
         if process_entries and not entries_blocked:
             entries, errors = await self._run_entries(now)
             critical.extend(errors)
@@ -416,9 +410,7 @@ class LocalTradingDaemon:
             return result, ("SEC_DAILY_RECONCILIATION_INCOMPLETE",)
         return result, ()
 
-    async def _run_exits(
-        self, now: datetime
-    ) -> tuple[ExitMonitorCycle | None, tuple[str, ...]]:
+    async def _run_exits(self, now: datetime) -> tuple[ExitMonitorCycle | None, tuple[str, ...]]:
         try:
             cycle, resolution_issues = await self._monitor_positions(now)
         except Exception as exc:
@@ -426,8 +418,7 @@ class LocalTradingDaemon:
         errors = list(resolution_issues)
         for blocked in cycle.blocked:
             errors.extend(
-                f"EXIT_MONITOR_BLOCKED:{blocked.symbol}:{reason}"
-                for reason in blocked.reason_codes
+                f"EXIT_MONITOR_BLOCKED:{blocked.symbol}:{reason}" for reason in blocked.reason_codes
             )
         return cycle, tuple(errors)
 
@@ -456,13 +447,9 @@ class LocalTradingDaemon:
     async def _process_ready(self, now: datetime) -> tuple[PipelineOutcome, ...]:
         # One event per worker pass keeps a slow model call from holding a lease
         # over a queue of unrelated filings.
-        return await self.trading_session.process_ready(
-            now=now, limit=self.entry_batch_size
-        )
+        return await self.trading_session.process_ready(now=now, limit=self.entry_batch_size)
 
-    async def _monitor_positions(
-        self, now: datetime
-    ) -> tuple[ExitMonitorCycle, tuple[str, ...]]:
+    async def _monitor_positions(self, now: datetime) -> tuple[ExitMonitorCycle, tuple[str, ...]]:
         del now
         portfolio_requested_at = self._now()
         portfolio = await self.portfolio_provider(portfolio_requested_at)

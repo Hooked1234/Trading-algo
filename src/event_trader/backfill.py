@@ -1350,9 +1350,7 @@ def _complete_exit_coverage(
 
     if window_end - evaluation_at < timedelta(minutes=60):
         return False
-    expected_bar_ends = tuple(
-        evaluation_at + timedelta(minutes=minute) for minute in range(1, 61)
-    )
+    expected_bar_ends = tuple(evaluation_at + timedelta(minutes=minute) for minute in range(1, 61))
     observed_bar_ends = {bar.timestamp for bar in bars}
     if not set(expected_bar_ends).issubset(observed_bar_ends):
         return False

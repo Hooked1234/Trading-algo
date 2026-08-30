@@ -130,9 +130,7 @@ class CsvEligibilityResolver:
                 known_at=known_at.astimezone(UTC),
                 common_stock=_optional_bool(row, "common_stock"),
                 us_listing=_optional_bool(row, "us_listing"),
-                corporate_actions_complete=_optional_bool(
-                    row, "corporate_actions_complete"
-                ),
+                corporate_actions_complete=_optional_bool(row, "corporate_actions_complete"),
                 source=_required(row, "source"),
             )
         except (TypeError, ValueError) as exc:

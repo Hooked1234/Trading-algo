@@ -599,10 +599,7 @@ async def test_one_bundle_covers_all_scenarios_and_loads_spy(tmp_path: Path) -> 
         datetime(2019, 1, 3, 14, 45, tzinfo=UTC),
     ]
     assert all(not record.scenario_covered for record in records)
-    assert all(
-        record.status is CoverageStatus.INSUFFICIENT_EXIT_COVERAGE
-        for record in records
-    )
+    assert all(record.status is CoverageStatus.INSUFFICIENT_EXIT_COVERAGE for record in records)
     assert all(record.bundle_bar_count == 1 for record in records)
     assert all(record.bundle_quote_count == 5 for record in records)
     assert all(record.benchmark_bar_count == 1 for record in records)

@@ -153,9 +153,7 @@ def test_unknown_borrow_evidence_allows_long_and_blocks_short(
         tmp_path, filing, long_insight, decision_time
     )
 
-    unknown_borrow = state.model_copy(
-        update={"shortable": None, "shortable_shares": 0}
-    )
+    unknown_borrow = state.model_copy(update={"shortable": None, "shortable_shares": 0})
     case = builder.build(coverage, unknown_borrow)
 
     assert case.snapshot.market.shortable is False

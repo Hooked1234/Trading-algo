@@ -179,9 +179,7 @@ async def test_exit_monitor_resamples_time_after_portfolio_io(
     )
 
     async def portfolio_provider(requested_at):
-        return empty_portfolio.model_copy(
-            update={"as_of": requested_at + timedelta(seconds=1)}
-        )
+        return empty_portfolio.model_copy(update={"as_of": requested_at + timedelta(seconds=1)})
 
     class TimingMonitor:
         async def run_cycle(self, *, portfolio, signals, markets, now):
@@ -224,9 +222,7 @@ async def test_one_entry_worker_leases_one_event_at_a_time(
 async def test_a_larger_entry_batch_must_be_configured_explicitly(
     filing, empty_portfolio, decision_time
 ) -> None:
-    daemon, _store, session = _daemon(
-        filing, empty_portfolio, decision_time, entry_batch_size=5
-    )
+    daemon, _store, session = _daemon(filing, empty_portfolio, decision_time, entry_batch_size=5)
 
     await daemon.run_cycle(now=decision_time)
 

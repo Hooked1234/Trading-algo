@@ -87,9 +87,7 @@ def test_failed_gate_never_authorizes(decision_time) -> None:
     )
 
 
-def test_promotion_artifact_is_written_immutably_and_revalidated(
-    tmp_path, decision_time
-) -> None:
+def test_promotion_artifact_is_written_immutably_and_revalidated(tmp_path, decision_time) -> None:
     artifact = _artifact(decision_time)
     target = write_promotion_artifact(artifact, tmp_path / "promotion.json")
 

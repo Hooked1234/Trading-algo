@@ -28,9 +28,7 @@ def test_daily_sec_reconciliation_is_complete(filing, decision_time) -> None:
     assert result.complete
 
 
-def test_reconciliation_gap_persists_and_blocks_orders(
-    tmp_path, filing, decision_time
-) -> None:
+def test_reconciliation_gap_persists_and_blocks_orders(tmp_path, filing, decision_time) -> None:
     path = tmp_path / "reconciliation.sqlite"
     incomplete = reconcile_sec_accessions(
         daily_index_accessions=(filing.accession_number, "0000320193-26-000099"),
@@ -51,9 +49,7 @@ def test_reconciliation_gap_persists_and_blocks_orders(
     )
     reopened.save(session_date=decision_time.date(), result=complete)
     assert not reopened.orders_blocked()
-    assert reopened.orders_blocked(
-        required_through=decision_time.date() + timedelta(days=1)
-    )
+    assert reopened.orders_blocked(required_through=decision_time.date() + timedelta(days=1))
     reopened.close()
 
 
@@ -73,9 +69,9 @@ async def test_daily_reconciler_fetches_compares_and_persists(
             return (filing,)
 
     ledger = SQLiteSecReconciliationLedger(tmp_path / "reconciliation.sqlite")
-    result = await DailySecReconciler(
-        source=Source(), inventory=Inventory(), ledger=ledger
-    ).run(session_date=session_date, reconciled_at=decision_time)
+    result = await DailySecReconciler(source=Source(), inventory=Inventory(), ledger=ledger).run(
+        session_date=session_date, reconciled_at=decision_time
+    )
 
     assert result.complete
     assert ledger.latest() == (session_date, result)

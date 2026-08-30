@@ -176,9 +176,7 @@ def build_data_quality_report(
     )
     lag_accounting_complete = bool(records) and not missing_lag_outcome
     if missing_lag_outcome:
-        notes.append(
-            "At least one filing lacks a coverage outcome for every 1/3/5/10-minute lag"
-        )
+        notes.append("At least one filing lacks a coverage outcome for every 1/3/5/10-minute lag")
     return DataQualityReport(
         generated_at=generated_at,
         filing_count=len(records),
@@ -196,9 +194,7 @@ def build_data_quality_report(
         coverage_by_feed=dict(
             Counter(record.feed for record in scenario_records if record.feed is not None)
         ),
-        coverage_by_lag=dict(
-            Counter(str(record.lag_minutes) for record in scenario_records)
-        ),
+        coverage_by_lag=dict(Counter(str(record.lag_minutes) for record in scenario_records)),
         tradable_coverage_records=sum(
             bool(record.tradable_coverage_complete) for record in scenario_records
         ),
@@ -393,9 +389,7 @@ class ParquetMarketDataLake:
         if not normalized_feed:
             raise ValueError("market-data feed must not be empty")
         collection = "bars" if model is Bar else "quotes"
-        symbol_root = (
-            self.root / collection / f"source={source.value}" / f"symbol={normalized}"
-        )
+        symbol_root = self.root / collection / f"source={source.value}" / f"symbol={normalized}"
         paths = _partition_paths(symbol_root, start, end)
         loaded = self._read_models(paths, model)
         if any(record.symbol.upper() != normalized for record in loaded):
@@ -416,9 +410,9 @@ class ParquetMarketDataLake:
         return tuple(by_timestamp[timestamp] for timestamp in sorted(by_timestamp))
 
     @staticmethod
-    def _read_models[
-        Record: (FilingEvent, Bar, Quote)
-    ](paths: Iterable[Path], model: type[Record]) -> tuple[Record, ...]:
+    def _read_models[Record: (FilingEvent, Bar, Quote)](
+        paths: Iterable[Path], model: type[Record]
+    ) -> tuple[Record, ...]:
         records: list[Record] = []
         for path in sorted(paths):
             frame = pl.read_parquet(path, hive_partitioning=False)

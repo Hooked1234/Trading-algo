@@ -200,16 +200,11 @@ class ResearchGateEvaluator:
                     ),
                     GateCheck(
                         name=f"{direction.value}_double_cost_stress",
-                        passed=(
-                            direction_stress is not None and direction_stress >= 0
-                        ),
+                        passed=(direction_stress is not None and direction_stress >= 0),
                         observed=(
                             float(direction_stress)
                             if direction_stress is not None
-                            else (
-                                "missing or invalid for "
-                                f"{direction_invalid_stress} trades"
-                            )
+                            else (f"missing or invalid for {direction_invalid_stress} trades")
                         ),
                         required="complete stress P&L and >= 0 total",
                     ),
@@ -307,8 +302,7 @@ def _validate_gate_trade_integrity(trades: Sequence[TradeResult]) -> None:
         event_id = raw_event_id.strip()
         if event_id in event_ids_by_variant[trade.strategy_variant]:
             raise ValueError(
-                "gate trades require unique metadata.event_id values within each "
-                "strategy_variant"
+                "gate trades require unique metadata.event_id values within each strategy_variant"
             )
         event_ids_by_variant[trade.strategy_variant].add(event_id)
 
@@ -564,9 +558,7 @@ def paired_ai_gate(
         raise ResearchRunGateError("paired runs must share one cost model")
 
     ai_trade_events = {
-        str(trade.metadata.get("event_id"))
-        for trade in ai_run.trades
-        if trade.out_of_sample
+        str(trade.metadata.get("event_id")) for trade in ai_run.trades if trade.out_of_sample
     }
     abstentions = tuple(
         sorted(

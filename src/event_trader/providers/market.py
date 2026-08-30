@@ -117,15 +117,9 @@ _INTRADAY_TIMEFRAME = re.compile(r"^(?P<count>[1-9]\d*)(?P<unit>Min|Hour)$")
 def _intraday_bar_duration(timeframe: str) -> timedelta:
     match = _INTRADAY_TIMEFRAME.fullmatch(timeframe.strip())
     if match is None:
-        raise ValueError(
-            "only explicit intraday Alpaca timeframes (NMin/NHour) are supported"
-        )
+        raise ValueError("only explicit intraday Alpaca timeframes (NMin/NHour) are supported")
     count = int(match.group("count"))
-    return (
-        timedelta(minutes=count)
-        if match.group("unit") == "Min"
-        else timedelta(hours=count)
-    )
+    return timedelta(minutes=count) if match.group("unit") == "Min" else timedelta(hours=count)
 
 
 def _bar_completion_timestamp(value: Any, duration: timedelta) -> datetime:

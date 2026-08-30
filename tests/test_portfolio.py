@@ -33,9 +33,7 @@ def test_strategy_ledger_is_idempotent_and_resets_daily_pnl(tmp_path, decision_t
     duplicate = ledger.record_closed_trade(
         trade_id="trade-1", net_pnl=Decimal("125"), closed_at=decision_time
     )
-    next_day = ledger.mark_unrealized(
-        pnl=Decimal("-25"), at=decision_time + timedelta(days=1)
-    )
+    next_day = ledger.mark_unrealized(pnl=Decimal("-25"), at=decision_time + timedelta(days=1))
 
     assert duplicate == first
     assert next_day.cumulative_realized_pnl == Decimal("125")
@@ -45,9 +43,7 @@ def test_strategy_ledger_is_idempotent_and_resets_daily_pnl(tmp_path, decision_t
 
 
 @pytest.mark.asyncio
-async def test_portfolio_assembler_reserves_open_entry_exposure(
-    tmp_path, decision_time
-) -> None:
+async def test_portfolio_assembler_reserves_open_entry_exposure(tmp_path, decision_time) -> None:
     store = SQLiteOperationalStore(tmp_path / "state.sqlite", tmp_path / "raw")
     strategy = SQLiteStrategyLedger(
         tmp_path / "strategy.sqlite",
@@ -144,9 +140,7 @@ async def test_portfolio_assembler_refreshes_strategy_mark(tmp_path, decision_ti
     strategy.close()
 
 
-def test_pnl_synchronizer_records_realized_and_unrealized_once(
-    tmp_path, decision_time
-) -> None:
+def test_pnl_synchronizer_records_realized_and_unrealized_once(tmp_path, decision_time) -> None:
     ledger = SQLiteStrategyLedger(
         tmp_path / "strategy.sqlite",
         strategy_id="sec-8k-continuation-v1",
@@ -234,9 +228,7 @@ def test_pnl_synchronizer_records_realized_and_unrealized_once(
     ledger.close()
 
 
-def test_pnl_synchronizer_rejects_unowned_broker_position(
-    tmp_path, decision_time
-) -> None:
+def test_pnl_synchronizer_rejects_unowned_broker_position(tmp_path, decision_time) -> None:
     ledger = SQLiteStrategyLedger(
         tmp_path / "strategy.sqlite",
         strategy_id="sec-8k-continuation-v1",

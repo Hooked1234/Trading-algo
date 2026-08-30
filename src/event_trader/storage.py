@@ -74,9 +74,7 @@ _ALLOWED_EXECUTION_TRANSITIONS = {
         }
     ),
     ExecutionStatus.FILLED: frozenset({ExecutionStatus.FILLED}),
-    ExecutionStatus.CANCELLED: frozenset(
-        {ExecutionStatus.CANCELLED, ExecutionStatus.FILLED}
-    ),
+    ExecutionStatus.CANCELLED: frozenset({ExecutionStatus.CANCELLED, ExecutionStatus.FILLED}),
     ExecutionStatus.REJECTED: frozenset({ExecutionStatus.REJECTED}),
 }
 
@@ -243,9 +241,7 @@ class SQLiteOperationalStore:
         _validate_limit(limit)
         return await asyncio.to_thread(self._list_filings_sync, limit)
 
-    async def list_filings_for_session(
-        self, session_date: date
-    ) -> tuple[FilingEvent, ...]:
+    async def list_filings_for_session(self, session_date: date) -> tuple[FilingEvent, ...]:
         """Return the complete NY-local calendar day without a global row cap."""
 
         start = datetime.combine(session_date, time.min, tzinfo=NEW_YORK).astimezone(UTC)
@@ -339,9 +335,7 @@ class SQLiteOperationalStore:
         _validate_limit(limit)
         return await asyncio.to_thread(self._list_execution_reports_sync, limit)
 
-    async def list_execution_reports_since(
-        self, since: datetime
-    ) -> tuple[ExecutionReport, ...]:
+    async def list_execution_reports_since(self, since: datetime) -> tuple[ExecutionReport, ...]:
         return await asyncio.to_thread(self._list_execution_reports_since_sync, _utc(since))
 
     async def save_execution_fill(self, fill: ExecutionFill) -> bool:
@@ -462,12 +456,8 @@ class SQLiteOperationalStore:
             published_at,
         )
 
-    async def get_pipeline_outcome(
-        self, event_id: str, strategy_version: str
-    ) -> str | None:
-        return await asyncio.to_thread(
-            self._get_pipeline_outcome_sync, event_id, strategy_version
-        )
+    async def get_pipeline_outcome(self, event_id: str, strategy_version: str) -> str | None:
+        return await asyncio.to_thread(self._get_pipeline_outcome_sync, event_id, strategy_version)
 
     async def count_pipeline_outcomes(self) -> int:
         return await asyncio.to_thread(self._scalar_count, "pipeline_outcomes")
@@ -497,9 +487,7 @@ class SQLiteOperationalStore:
         detail: str | None = None,
         occurred_at: datetime | None = None,
     ) -> int:
-        return await asyncio.to_thread(
-            self._record_critical_event_sync, code, detail, occurred_at
-        )
+        return await asyncio.to_thread(self._record_critical_event_sync, code, detail, occurred_at)
 
     async def list_critical_events(
         self, *, since: datetime | None = None
@@ -966,9 +954,7 @@ class SQLiteOperationalStore:
             ).fetchall()
         return tuple(FilingEvent.model_validate_json(row["payload_json"]) for row in rows)
 
-    def _list_filings_between_sync(
-        self, start: datetime, end: datetime
-    ) -> tuple[FilingEvent, ...]:
+    def _list_filings_between_sync(self, start: datetime, end: datetime) -> tuple[FilingEvent, ...]:
         with self._lock:
             self._ensure_open()
             rows = self._connection.execute(
@@ -1382,9 +1368,7 @@ class SQLiteOperationalStore:
                         self._connection.commit()
                         return False
                     if not _is_commission_finalization(existing, fill):
-                        raise StorageIntegrityError(
-                            "execution id was reused for a different fill"
-                        )
+                        raise StorageIntegrityError("execution id was reused for a different fill")
                     self._connection.execute(
                         """
                         UPDATE execution_fills
@@ -1476,9 +1460,7 @@ class SQLiteOperationalStore:
             ).fetchall()
         return tuple(ExecutionReport.model_validate_json(row["payload_json"]) for row in rows)
 
-    def _list_execution_reports_since_sync(
-        self, since: datetime
-    ) -> tuple[ExecutionReport, ...]:
+    def _list_execution_reports_since_sync(self, since: datetime) -> tuple[ExecutionReport, ...]:
         with self._lock:
             self._ensure_open()
             rows = self._connection.execute(
@@ -1812,9 +1794,7 @@ class SQLiteOperationalStore:
                         (_iso(stamp), outbox_id, lease_token),
                     )
                     if cursor.rowcount != 1:
-                        raise StorageError(
-                            "outbox lease is missing, expired, or already published"
-                        )
+                        raise StorageError("outbox lease is missing, expired, or already published")
                 self._connection.commit()
             except sqlite3.IntegrityError as exc:
                 self._connection.rollback()
@@ -1825,9 +1805,7 @@ class SQLiteOperationalStore:
                 self._connection.rollback()
                 raise
 
-    def _get_pipeline_outcome_sync(
-        self, event_id: str, strategy_version: str
-    ) -> str | None:
+    def _get_pipeline_outcome_sync(self, event_id: str, strategy_version: str) -> str | None:
         with self._lock:
             self._ensure_open()
             row = self._connection.execute(
@@ -1928,9 +1906,7 @@ class SQLiteOperationalStore:
             self._connection.commit()
             return int(cursor.lastrowid or 0)
 
-    def _list_critical_events_sync(
-        self, since: datetime | None
-    ) -> tuple[dict[str, str], ...]:
+    def _list_critical_events_sync(self, since: datetime | None) -> tuple[dict[str, str], ...]:
         query = """
             SELECT code, detail, occurred_at_utc FROM critical_events
             {where}
@@ -1968,8 +1944,7 @@ class SQLiteOperationalStore:
                 (_iso(_utc(since)),),
             ).fetchall()
         return tuple(
-            (str(row["event_id"]), str(row["stage"]), str(row["payload_json"]))
-            for row in rows
+            (str(row["event_id"]), str(row["stage"]), str(row["payload_json"])) for row in rows
         )
 
     def _record_heartbeat_sync(self, now: datetime) -> None:
@@ -1995,9 +1970,7 @@ class SQLiteOperationalStore:
             )
             self._connection.commit()
 
-    def _get_heartbeat_sync(
-        self, session_date: date
-    ) -> tuple[datetime, datetime, int] | None:
+    def _get_heartbeat_sync(self, session_date: date) -> tuple[datetime, datetime, int] | None:
         with self._lock:
             self._ensure_open()
             row = self._connection.execute(
@@ -2049,8 +2022,7 @@ def _validate_insight_key(insight: NewsInsight, key: AnalysisKey) -> None:
     if insight.status is InsightStatus.ACTIONABLE and insight.model_id != key.model_id:
         raise StorageIntegrityError("an actionable insight must match its pinned model")
     if insight.status is InsightStatus.ACTIONABLE and (
-        insight.prompt_version != key.prompt_version
-        or insight.schema_version != key.schema_version
+        insight.prompt_version != key.prompt_version or insight.schema_version != key.schema_version
     ):
         raise StorageIntegrityError("an actionable insight must match its pinned prompt schema")
 

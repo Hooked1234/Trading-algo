@@ -8,9 +8,7 @@ from event_trader.providers.sec_daily import SecDailyIndexProvider, daily_master
 
 
 def test_daily_master_index_url_uses_calendar_quarter() -> None:
-    assert daily_master_index_url(date(2026, 8, 25)).endswith(
-        "/2026/QTR3/master.20260825.idx"
-    )
+    assert daily_master_index_url(date(2026, 8, 25)).endswith("/2026/QTR3/master.20260825.idx")
 
 
 @pytest.mark.asyncio

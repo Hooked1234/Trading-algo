@@ -181,9 +181,7 @@ class IBKRLiveFeatureProvider:
     def _require_live_feed(self, symbol: str) -> None:
         status = self._bars.feed_status(symbol)
         if status is not FeedStatus.LIVE:
-            raise IBKRMarketDataNotReady(
-                f"{symbol} runtime bars are {status.value}, not live"
-            )
+            raise IBKRMarketDataNotReady(f"{symbol} runtime bars are {status.value}, not live")
 
     def _load(self, symbol: str, *, start: datetime, end: datetime) -> tuple[Bar, ...]:
         loaded = tuple(self._bars.minute_bars(symbol, start=start, end=end))

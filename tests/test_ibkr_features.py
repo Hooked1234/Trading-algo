@@ -46,9 +46,7 @@ def _history(
         closing = _XNYS.session_close(session).to_pydatetime().astimezone(UTC)
         current = index == 20
         full_minutes = int((closing - opening).total_seconds() // 60)
-        minute_count = (
-            int((as_of - opening).total_seconds() // 60) if current else full_minutes
-        )
+        minute_count = int((as_of - opening).total_seconds() // 60) if current else full_minutes
         volume = 6_000 if current else 600
         # Vary the per-session drift so the abnormal-return residuals have
         # positive variance, as a real history does.
@@ -93,9 +91,7 @@ class StubBarBackend:
         self.status = status
 
     def minute_bars(self, symbol, *, start, end):
-        return tuple(
-            bar for bar in self.bars.get(symbol, ()) if start <= bar.timestamp <= end
-        )
+        return tuple(bar for bar in self.bars.get(symbol, ()) if start <= bar.timestamp <= end)
 
     def feed_status(self, symbol):
         del symbol
@@ -130,9 +126,7 @@ def test_runtime_features_carry_provider_feed_and_input_hash(filing, as_of) -> N
     assert features.feed == "ibkr:live"
     assert features.security_type == "common_stock"
     assert features.us_listed is True
-    assert features.input_sha256 == feature_input_sha256(
-        bars["AAPL"], bars["SPY"], as_of=as_of
-    )
+    assert features.input_sha256 == feature_input_sha256(bars["AAPL"], bars["SPY"], as_of=as_of)
     assert features.as_of == as_of
 
 
@@ -160,9 +154,7 @@ def test_alpaca_bars_are_never_mixed_into_the_runtime(filing, as_of) -> None:
 def test_two_feeds_in_one_snapshot_fail_closed(filing, as_of) -> None:
     bars = _history(as_of)
     mixed = dict(bars)
-    mixed["SPY"] = tuple(
-        bar.model_copy(update={"feed": "ibkr:delayed"}) for bar in bars["SPY"]
-    )
+    mixed["SPY"] = tuple(bar.model_copy(update={"feed": "ibkr:delayed"}) for bar in bars["SPY"])
     provider = _provider(StubBarBackend(mixed))
 
     with pytest.raises(IBKRMarketDataPayloadError, match="one feed"):
@@ -181,9 +173,7 @@ def test_a_non_live_feed_fails_closed(filing, as_of, status) -> None:
 
 
 def test_stale_bars_fail_closed(filing, as_of) -> None:
-    provider = _provider(
-        StubBarBackend(_history(as_of)), max_bar_age=timedelta(seconds=30)
-    )
+    provider = _provider(StubBarBackend(_history(as_of)), max_bar_age=timedelta(seconds=30))
 
     with pytest.raises(IBKRMarketDataNotReady, match="stale"):
         provider.build(filing, "AAPL", as_of=as_of + timedelta(minutes=5))
@@ -194,9 +184,7 @@ def test_future_bars_fail_closed(filing, as_of) -> None:
     future = dict(bars)
     future["AAPL"] = (
         *bars["AAPL"],
-        bars["AAPL"][-1].model_copy(
-            update={"timestamp": as_of + timedelta(minutes=5)}
-        ),
+        bars["AAPL"][-1].model_copy(update={"timestamp": as_of + timedelta(minutes=5)}),
     )
 
     class FutureBackend(StubBarBackend):

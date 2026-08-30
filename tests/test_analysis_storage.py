@@ -72,9 +72,7 @@ async def test_a_stored_analysis_is_immutable(
         assert await store.get_insight(key.key) == long_insight
 
         with pytest.raises(StorageIntegrityError, match="different answer"):
-            await store.save_insight(
-                long_insight.model_copy(update={"confidence": 0.5}), key
-            )
+            await store.save_insight(long_insight.model_copy(update={"confidence": 0.5}), key)
 
 
 @pytest.mark.asyncio
@@ -166,16 +164,15 @@ async def test_a_failed_completion_leaves_nothing_behind(
             )
 
         assert await store.get_insight(key.key) is None
-        assert await store.get_pipeline_outcome(
-            snapshot.filing.event_id, "sec-8k-continuation-v1"
-        ) is None
+        assert (
+            await store.get_pipeline_outcome(snapshot.filing.event_id, "sec-8k-continuation-v1")
+            is None
+        )
         assert await store.count_outbox(published=False) == 1
 
 
 @pytest.mark.asyncio
-async def test_a_recorded_outcome_cannot_be_replaced(
-    tmp_path, snapshot, decision_time
-) -> None:
+async def test_a_recorded_outcome_cannot_be_replaced(tmp_path, snapshot, decision_time) -> None:
     async with _store(tmp_path, decision_time) as store:
         await store.save_filing_event(snapshot.filing)
         for stage, payload in (("filtered", '{"stage":"filtered"}'),) * 2:
@@ -198,9 +195,7 @@ async def test_a_recorded_outcome_cannot_be_replaced(
 
 
 @pytest.mark.asyncio
-async def test_the_singleton_lease_refuses_a_second_live_holder(
-    tmp_path, decision_time
-) -> None:
+async def test_the_singleton_lease_refuses_a_second_live_holder(tmp_path, decision_time) -> None:
     async with _store(tmp_path, decision_time) as store:
         assert await store.acquire_lease(
             "trading.daemon", holder="a", ttl=timedelta(seconds=30), now=decision_time
@@ -222,9 +217,7 @@ async def test_the_singleton_lease_refuses_a_second_live_holder(
 
 
 @pytest.mark.asyncio
-async def test_critical_events_and_heartbeats_are_durable(
-    tmp_path, decision_time
-) -> None:
+async def test_critical_events_and_heartbeats_are_durable(tmp_path, decision_time) -> None:
     async with _store(tmp_path, decision_time) as store:
         await store.record_critical_event(
             "EXIT_MONITOR_ERROR", detail="gateway lost", occurred_at=decision_time

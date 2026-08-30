@@ -710,9 +710,7 @@ async def test_execution_fills_are_idempotent_and_gain_only_their_commission(
         assert await store.save_execution_fill(fill) is True
         assert await store.save_execution_fill(fill) is False
 
-        final = fill.model_copy(
-            update={"commission": Decimal("0.35"), "commission_final": True}
-        )
+        final = fill.model_copy(update={"commission": Decimal("0.35"), "commission_final": True})
         assert await store.save_execution_fill(final) is True
         assert await store.list_execution_fills(intent.order_id) == (final,)
 
@@ -774,9 +772,7 @@ def _downgrade_to_gate_b(database: Path) -> None:
     try:
         connection.execute("DROP TABLE execution_fills")
         connection.execute("PRAGMA user_version = 0")
-        rows = connection.execute(
-            "SELECT order_id, payload_json FROM order_intents"
-        ).fetchall()
+        rows = connection.execute("SELECT order_id, payload_json FROM order_intents").fetchall()
         for order_id, payload_json in rows:
             payload = json.loads(payload_json)
             payload.pop("replaces_order_id", None)

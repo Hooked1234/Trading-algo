@@ -50,9 +50,7 @@ def test_loss_limit_latches_until_manual_reset(
     assert signal is not None
     guard = InMemoryRiskHaltGuard()
     engine = RiskEngine(halt_guard=guard)
-    breached = empty_portfolio.model_copy(
-        update={"strategy_realized_pnl_today": Decimal("-1500")}
-    )
+    breached = empty_portfolio.model_copy(update={"strategy_realized_pnl_today": Decimal("-1500")})
 
     first = engine.assess(signal, breached, snapshot.market, decision_time)
     recovered = engine.assess(signal, empty_portfolio, snapshot.market, decision_time)
@@ -208,8 +206,7 @@ def test_property_approval_never_violates_portfolio_limits(
     )
     strategy_equity = min(nav_decimal, Decimal("100000"))
     strategy_peak = (
-        strategy_equity
-        / (Decimal("1") - Decimal(drawdown_bps) / Decimal("10000"))
+        strategy_equity / (Decimal("1") - Decimal(drawdown_bps) / Decimal("10000"))
     ).quantize(Decimal("0.01"))
     portfolio = PortfolioState(
         as_of=empty_portfolio.as_of,
@@ -240,7 +237,5 @@ def test_property_approval_never_violates_portfolio_limits(
         assert decision.notional <= strategy_equity * Decimal("0.15")
         assert gross + decision.notional <= strategy_equity * Decimal("0.75")
         assert abs(net + decision.notional) <= strategy_equity * Decimal("0.40")
-        assert portfolio.strategy_realized_pnl_today > -(
-            strategy_equity * Decimal("0.015")
-        )
+        assert portfolio.strategy_realized_pnl_today > -(strategy_equity * Decimal("0.015"))
         assert (strategy_peak - strategy_equity) / strategy_peak < Decimal("0.05")

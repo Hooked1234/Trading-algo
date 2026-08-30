@@ -76,9 +76,7 @@ def test_insight_artifact_revalidates_evidence_grounding(
 def test_research_case_builder_rejects_a_missing_exit_minute(
     tmp_path, filing, long_insight, decision_time
 ) -> None:
-    _, coverage, _insight, state, lake = case_inputs(
-        tmp_path, filing, long_insight, decision_time
-    )
+    _, coverage, _insight, state, lake = case_inputs(tmp_path, filing, long_insight, decision_time)
     missing_at = decision_time + timedelta(minutes=17)
     original = lake.read_bars(
         "AAPL",
@@ -86,9 +84,7 @@ def test_research_case_builder_rejects_a_missing_exit_minute(
         end=coverage.bundle_end,
     )
     incomplete_lake = ParquetMarketDataLake(tmp_path / "incomplete-lake")
-    incomplete_lake.write_filings(
-        [lake.read_filing(coverage.accession_number)], batch_id="filing"
-    )
+    incomplete_lake.write_filings([lake.read_filing(coverage.accession_number)], batch_id="filing")
     incomplete_lake.write_bars(
         (bar for bar in original if bar.timestamp != missing_at), batch_id="asset"
     )

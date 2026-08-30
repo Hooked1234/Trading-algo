@@ -41,15 +41,10 @@ def test_csv_eligibility_resolves_exact_cik_symbol_and_historical_interval(
     assert resolver.manifest_sha256 in result.source
 
 
-def test_csv_eligibility_refuses_knowledge_published_after_event(
-    tmp_path: Path, filing
-) -> None:
+def test_csv_eligibility_refuses_knowledge_published_after_event(tmp_path: Path, filing) -> None:
     path = _write(
         tmp_path / "eligibility.csv",
-        (
-            "320193,AAPL,2018-01-01,,2027-01-01T00:00:00Z,true,true,true,"
-            "future-source\n"
-        ),
+        ("320193,AAPL,2018-01-01,,2027-01-01T00:00:00Z,true,true,true,future-source\n"),
     )
 
     assert CsvEligibilityResolver(path)(filing, "AAPL") is None
@@ -72,9 +67,7 @@ def test_csv_eligibility_rejects_overlapping_intervals(tmp_path: Path) -> None:
 def test_csv_eligibility_rejects_ambiguous_booleans(tmp_path: Path, value: str) -> None:
     path = _write(
         tmp_path / "eligibility.csv",
-        (
-            f"320193,AAPL,2018-01-01,,2020-01-01T00:00:00Z,{value},true,true,source\n"
-        ),
+        (f"320193,AAPL,2018-01-01,,2020-01-01T00:00:00Z,{value},true,true,source\n"),
     )
 
     with pytest.raises(EligibilityManifestError, match="must be true"):

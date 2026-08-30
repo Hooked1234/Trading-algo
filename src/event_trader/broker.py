@@ -140,9 +140,7 @@ class PaperAccountGuard:
 class Broker(Protocol):
     """Execution interface shared by IBKR, tests, and deterministic replays."""
 
-    def readiness(
-        self, profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         """Return fail-closed operational readiness."""
 
     def submit(self, intent: OrderIntent) -> ExecutionReport:
@@ -186,9 +184,7 @@ class OrderStateMachine:
         ExecutionStatus.FILLED: frozenset({ExecutionStatus.FILLED}),
         # A cancel acknowledgement can race a final fill callback.  Broker
         # truth may therefore promote a cancelled order to fully filled.
-        ExecutionStatus.CANCELLED: frozenset(
-            {ExecutionStatus.CANCELLED, ExecutionStatus.FILLED}
-        ),
+        ExecutionStatus.CANCELLED: frozenset({ExecutionStatus.CANCELLED, ExecutionStatus.FILLED}),
         ExecutionStatus.REJECTED: frozenset({ExecutionStatus.REJECTED}),
     }
     _RESTORE_ALLOWED: ClassVar[dict[ExecutionStatus, frozenset[ExecutionStatus]]] = {
@@ -394,6 +390,7 @@ class OrderStateMachine:
                 )
             self._reports[intent.order_id] = candidate
             return candidate
+
     @staticmethod
     def _validate_restored_report(intent: OrderIntent, report: ExecutionReport) -> None:
         if report.order_id != intent.order_id:
@@ -505,9 +502,7 @@ class InMemoryPaperBroker:
             strategy_unrealized_pnl=Decimal("0"),
         )
 
-    def readiness(
-        self, profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         checks: list[ReadinessCheck] = []
         try:
             self._guard.assert_paper(self.account_id, self.environment)

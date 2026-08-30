@@ -175,8 +175,7 @@ def load_daily_reports(directory: Path) -> tuple[DailyReportArtifact, ...]:
     """Load and re-verify every hashed session artifact in ``directory``."""
 
     artifacts = [
-        read_artifact(DailyReportArtifact, path)
-        for path in sorted(Path(directory).glob("*.json"))
+        read_artifact(DailyReportArtifact, path) for path in sorted(Path(directory).glob("*.json"))
     ]
     return tuple(sorted(artifacts, key=lambda item: item.session_date))
 
@@ -184,9 +183,7 @@ def load_daily_reports(directory: Path) -> tuple[DailyReportArtifact, ...]:
 class SessionStateReader(Protocol):
     """The operational state a session report is derived from."""
 
-    async def list_filings_for_session(
-        self, session_date: date
-    ) -> tuple[object, ...]: ...
+    async def list_filings_for_session(self, session_date: date) -> tuple[object, ...]: ...
 
     async def list_signals_since(self, since: datetime) -> tuple[object, ...]: ...
 
@@ -204,9 +201,7 @@ class SessionStateReader(Protocol):
         self, *, since: datetime | None = None
     ) -> tuple[dict[str, str], ...]: ...
 
-    async def get_heartbeat(
-        self, session_date: date
-    ) -> tuple[datetime, datetime, int] | None: ...
+    async def get_heartbeat(self, session_date: date) -> tuple[datetime, datetime, int] | None: ...
 
 
 async def build_daily_metrics(
@@ -258,13 +253,12 @@ async def build_daily_metrics(
             1 for intent in intents if getattr(intent, "submission_mode", "") == "paper"
         ),
         closed_trades=sum(
-            1 for report in reports if getattr(getattr(report, "status", None), "value", "")
-            == "filled"
+            1
+            for report in reports
+            if getattr(getattr(report, "status", None), "value", "") == "filled"
         ),
         duplicate_orders=sum(1 for stage in stages if stage == "duplicate_event"),
-        position_mismatches=sum(
-            1 for event in critical if "POSITION" in event["code"]
-        ),
+        position_mismatches=sum(1 for event in critical if "POSITION" in event["code"]),
         critical_errors=tuple(dict.fromkeys(event["code"] for event in critical)),
         model_cost_eur=model_cost_eur,
     )

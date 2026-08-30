@@ -138,9 +138,7 @@ async def test_quant_only_never_constructs_an_insight(
     snapshot, long_insight, empty_portfolio, decision_time
 ) -> None:
     provider = CountingInsightProvider(long_insight)
-    orchestrator = _orchestrator(
-        provider, decision_time, strategy=QuantOnlyContinuationStrategy()
-    )
+    orchestrator = _orchestrator(provider, decision_time, strategy=QuantOnlyContinuationStrategy())
 
     outcome = await orchestrator.process(snapshot, empty_portfolio, now=decision_time)
 

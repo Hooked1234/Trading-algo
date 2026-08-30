@@ -61,9 +61,7 @@ def test_quality_report_accounts_for_explicit_backfill_gaps(filing, decision_tim
     assert report.tradable_coverage_records == 0
 
 
-def test_quality_report_counts_non_contiguous_exit_coverage(
-    filing, decision_time
-) -> None:
+def test_quality_report_counts_non_contiguous_exit_coverage(filing, decision_time) -> None:
     coverage = CoverageRecord(
         record_id="incomplete-exit",
         quarter="2026-Q2",
@@ -150,13 +148,9 @@ def test_data_lake_reads_exact_filing_and_deduplicated_market_slice(
     ) == (long_market.quote,)
 
 
-def test_data_lake_rejects_conflicting_market_records(
-    tmp_path, long_market, decision_time
-) -> None:
+def test_data_lake_rejects_conflicting_market_records(tmp_path, long_market, decision_time) -> None:
     lake = ParquetMarketDataLake(tmp_path)
-    conflict = long_market.quote.model_copy(
-        update={"ask": long_market.quote.ask + Decimal("0.01")}
-    )
+    conflict = long_market.quote.model_copy(update={"ask": long_market.quote.ask + Decimal("0.01")})
     lake.write_quotes([long_market.quote], batch_id="quote-one")
     lake.write_quotes([conflict], batch_id="quote-two")
 
@@ -241,14 +235,10 @@ def _lag_coverage(filing, decision_time, lag_minutes: int) -> CoverageRecord:
     )
 
 
-def test_quality_report_requires_an_outcome_for_every_registered_lag(
-    filing, decision_time
-) -> None:
+def test_quality_report_requires_an_outcome_for_every_registered_lag(filing, decision_time) -> None:
     partial = [_lag_coverage(filing, decision_time, lag) for lag in (1, 3, 5)]
 
-    incomplete = build_data_quality_report(
-        [filing], ["AAPL"], partial, generated_at=decision_time
-    )
+    incomplete = build_data_quality_report([filing], ["AAPL"], partial, generated_at=decision_time)
     complete = build_data_quality_report(
         [filing],
         ["AAPL"],

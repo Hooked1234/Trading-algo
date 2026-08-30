@@ -46,9 +46,7 @@ def test_cli_has_research_and_data_commands() -> None:
     assert "run-paper" in result.stdout
 
 
-def test_paper_prerequisites_fail_without_account_and_promotion(
-    tmp_path, monkeypatch
-) -> None:
+def test_paper_prerequisites_fail_without_account_and_promotion(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("event_trader.cli.ibapi_available", lambda: True)
     settings = Settings(
         sec_user_agent="event-trader test@example.com",
@@ -164,9 +162,7 @@ def test_ai_pairing_rejects_hindsight_selected_missing_trade(decision_time) -> N
     with pytest.raises(typer.BadParameter, match="must be derived from the paired insights"):
         _validate_ai_pairing_lineage(
             paired_trades=[baseline],
-            insights=[
-                _paired_insight(decision_time, event_id="event-1", actionable=True)
-            ],
+            insights=[_paired_insight(decision_time, event_id="event-1", actionable=True)],
             baseline_version=QuantOnlyContinuationStrategy.version,
             candidate_version="sec-8k-continuation-v1",
             model_id="provider/model-v1",

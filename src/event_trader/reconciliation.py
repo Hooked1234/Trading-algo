@@ -161,9 +161,7 @@ class SQLiteSecReconciliationLedger:
 
 
 class FilingInventory(Protocol):
-    async def list_filings_for_session(
-        self, session_date: date
-    ) -> tuple[FilingEvent, ...]: ...
+    async def list_filings_for_session(self, session_date: date) -> tuple[FilingEvent, ...]: ...
 
 
 class DailySecReconciler:
@@ -180,9 +178,7 @@ class DailySecReconciler:
         self.inventory = inventory
         self.ledger = ledger
 
-    async def run(
-        self, *, session_date: date, reconciled_at: datetime
-    ) -> SecReconciliationResult:
+    async def run(self, *, session_date: date, reconciled_at: datetime) -> SecReconciliationResult:
         expected, inventory = await asyncio.gather(
             self.source.accessions(session_date),
             self.inventory.list_filings_for_session(session_date),

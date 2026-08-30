@@ -137,10 +137,7 @@ class BacktestCase(FrozenModel):
             raise ValueError("market snapshot cannot be from after the decision time")
         if self.snapshot.market.quote.timestamp > self.decision_time:
             raise ValueError("decision quote cannot be from after the decision time")
-        if (
-            self.decision_time - self.snapshot.market.quote.timestamp
-            > _MAX_HISTORICAL_QUOTE_AGE
-        ):
+        if self.decision_time - self.snapshot.market.quote.timestamp > _MAX_HISTORICAL_QUOTE_AGE:
             raise ValueError("historical decision quote is stale")
         if self.portfolio.as_of > self.decision_time:
             raise ValueError("portfolio state cannot be from after the decision time")
@@ -215,17 +212,13 @@ class BacktestRunArtifact(HashedArtifact):
             raise ValueError("a backtest run requires exactly one outcome per case")
         if set(outcome_hashes) != set(self.case_hashes):
             raise ValueError("backtest outcomes and cases must describe the same case set")
-        if (self.variant is BacktestVariant.QUANT_ONLY) != (
-            self.insight_artifact_sha256 is None
-        ):
+        if (self.variant is BacktestVariant.QUANT_ONLY) != (self.insight_artifact_sha256 is None):
             raise ValueError("only the quant-only variant runs without an insight artifact")
         return self
 
     @property
     def trades(self) -> tuple[TradeResult, ...]:
-        return tuple(
-            outcome.trade for outcome in self.outcomes if outcome.trade is not None
-        )
+        return tuple(outcome.trade for outcome in self.outcomes if outcome.trade is not None)
 
 
 @dataclass(slots=True)
@@ -349,9 +342,7 @@ class HistoricalBacktester:
                 stage="filtered",
                 case_input_sha256=case_hash,
                 out_of_sample=out_of_sample,
-                reasons=self.strategy.rejection_reasons(
-                    case.snapshot, insight, case.decision_time
-                ),
+                reasons=self.strategy.rejection_reasons(case.snapshot, insight, case.decision_time),
             )
         risk = self.risk_engine.assess(
             signal,
@@ -454,9 +445,9 @@ class HistoricalBacktester:
                 "provider": case.lineage.provider if case.lineage is not None else None,
                 "feed": case.lineage.feed if case.lineage is not None else None,
                 "sample_period": (
-                    case.lineage.sample_period if case.lineage is not None else period_for(
-                        case.snapshot.filing.accepted_at
-                    )
+                    case.lineage.sample_period
+                    if case.lineage is not None
+                    else period_for(case.snapshot.filing.accepted_at)
                 ),
                 "case_input_sha256": case_hash,
             },
@@ -465,7 +456,7 @@ class HistoricalBacktester:
             event_id=signal.event_id,
             stage="closed_trade",
             case_input_sha256=case_hash,
-                out_of_sample=out_of_sample,
+            out_of_sample=out_of_sample,
             signal=signal,
             risk_decision=risk,
             trade=trade,
@@ -521,9 +512,7 @@ class HistoricalBacktester:
         for position in matured:
             self._open.remove(position)
             self._closed.append(position.trade)
-            self._peak_equity = max(
-                self._peak_equity, self._equity_at(position.trade.closed_at)
-            )
+            self._peak_equity = max(self._peak_equity, self._equity_at(position.trade.closed_at))
         self._peak_equity = max(self._peak_equity, self._equity_at(now))
 
     def _realized(self) -> Decimal:
@@ -611,9 +600,7 @@ class HistoricalBacktester:
     ) -> tuple[int, Decimal, Decimal, datetime, int] | None:
         attempts_with_quotes = ((case.decision_time, case.snapshot.market.quote),)
         if case.entry_reprice is not None:
-            attempts_with_quotes += (
-                (case.entry_reprice.attempted_at, case.entry_reprice.quote),
-            )
+            attempts_with_quotes += ((case.entry_reprice.attempted_at, case.entry_reprice.quote),)
 
         filled = 0
         weighted_mid = Decimal("0")
@@ -622,9 +609,7 @@ class HistoricalBacktester:
         attempts = 0
         for attempted_at, quote in attempts_with_quotes:
             attempts += 1
-            displayed = (
-                quote.ask_size if signal.direction is Direction.LONG else quote.bid_size
-            )
+            displayed = quote.ask_size if signal.direction is Direction.LONG else quote.bid_size
             quantity = min(requested_quantity - filled, displayed)
             if quantity <= 0:
                 continue

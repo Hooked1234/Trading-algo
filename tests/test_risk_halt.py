@@ -3,9 +3,7 @@ from datetime import timedelta
 from event_trader.risk_halt import SQLiteRiskHaltGuard
 
 
-def test_risk_halt_survives_restart_and_requires_manual_note(
-    tmp_path, decision_time
-) -> None:
+def test_risk_halt_survives_restart_and_requires_manual_note(tmp_path, decision_time) -> None:
     path = tmp_path / "risk.sqlite"
     first = SQLiteRiskHaltGuard(path)
     first.trip(reason="DAILY_LOSS_LIMIT", at=decision_time)

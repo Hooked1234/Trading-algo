@@ -189,9 +189,7 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def write_promotion_artifact(
-    artifact: ResearchPromotionArtifact, path: str | Path
-) -> Path:
+def write_promotion_artifact(artifact: ResearchPromotionArtifact, path: str | Path) -> Path:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():

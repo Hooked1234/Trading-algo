@@ -149,9 +149,7 @@ def test_backtest_missing_intrahour_minute_is_coverage_gap(
         snapshot=snapshot,
         portfolio=empty_portfolio,
         exit_points=tuple(
-            point
-            for point in full_path
-            if point.timestamp != decision_time + timedelta(minutes=17)
+            point for point in full_path if point.timestamp != decision_time + timedelta(minutes=17)
         ),
     )
 
@@ -168,9 +166,7 @@ def test_backtest_rejects_stale_decision_and_exit_quotes(
         update={"timestamp": decision_time - timedelta(seconds=6)}
     )
     stale_snapshot = snapshot.model_copy(
-        update={
-            "market": snapshot.market.model_copy(update={"quote": stale_decision_quote})
-        }
+        update={"market": snapshot.market.model_copy(update={"quote": stale_decision_quote})}
     )
     with pytest.raises(ValueError, match="decision quote is stale"):
         BacktestCase(
@@ -224,13 +220,9 @@ def test_quant_only_backtest_uses_deterministic_filing_item_category(
 def test_backtest_aborts_when_bounded_limit_and_reprice_do_not_fill(
     snapshot, long_insight, empty_portfolio, decision_time
 ) -> None:
-    empty_quote = snapshot.market.quote.model_copy(
-        update={"bid_size": 0, "ask_size": 0}
-    )
+    empty_quote = snapshot.market.quote.model_copy(update={"bid_size": 0, "ask_size": 0})
     empty_snapshot = snapshot.model_copy(
-        update={
-            "market": snapshot.market.model_copy(update={"quote": empty_quote})
-        }
+        update={"market": snapshot.market.model_copy(update={"quote": empty_quote})}
     )
     case = BacktestCase(
         decision_time=decision_time,
@@ -248,13 +240,9 @@ def test_backtest_aborts_when_bounded_limit_and_reprice_do_not_fill(
 def test_backtest_models_single_five_second_reprice(
     snapshot, long_insight, empty_portfolio, decision_time
 ) -> None:
-    empty_quote = snapshot.market.quote.model_copy(
-        update={"bid_size": 0, "ask_size": 0}
-    )
+    empty_quote = snapshot.market.quote.model_copy(update={"bid_size": 0, "ask_size": 0})
     empty_snapshot = snapshot.model_copy(
-        update={
-            "market": snapshot.market.model_copy(update={"quote": empty_quote})
-        }
+        update={"market": snapshot.market.model_copy(update={"quote": empty_quote})}
     )
     replacement = snapshot.market.quote.model_copy(
         update={
@@ -292,9 +280,7 @@ def test_backtest_sample_split_uses_filing_acceptance_across_year_boundary(
     snapshot, long_insight, empty_portfolio
 ) -> None:
     accepted_at = datetime(2023, 12, 31, 20, 0, tzinfo=UTC)
-    decision_time = NyseSessionCalendar().next_evaluation_time(
-        accepted_at + timedelta(minutes=5)
-    )
+    decision_time = NyseSessionCalendar().next_evaluation_time(accepted_at + timedelta(minutes=5))
     assert decision_time is not None
     historical_filing = snapshot.filing.model_copy(
         update={
@@ -489,12 +475,8 @@ def _later_case(snapshot, empty_portfolio, decision_time, *, symbol, minutes):
             "retrieved_at": accepted_at,
         }
     )
-    quote = snapshot.market.quote.model_copy(
-        update={"symbol": symbol, "timestamp": later}
-    )
-    market = snapshot.market.model_copy(
-        update={"symbol": symbol, "as_of": later, "quote": quote}
-    )
+    quote = snapshot.market.quote.model_copy(update={"symbol": symbol, "timestamp": later})
+    market = snapshot.market.model_copy(update={"symbol": symbol, "as_of": later, "quote": quote})
     event_snapshot = snapshot.model_copy(update={"filing": filing, "market": market})
     return BacktestCase(
         decision_time=later,
@@ -527,9 +509,7 @@ def test_backtest_marks_open_positions_before_the_next_decision(
             terminal_midpoint="101.50",
         ),
     )
-    second = _later_case(
-        snapshot, empty_portfolio, decision_time, symbol="MSFT", minutes=30
-    )
+    second = _later_case(snapshot, empty_portfolio, decision_time, symbol="MSFT", minutes=30)
     insights = {
         snapshot.filing.event_id: long_insight,
         second.snapshot.filing.event_id: long_insight.model_copy(
@@ -541,9 +521,9 @@ def test_backtest_marks_open_positions_before_the_next_decision(
     }
     engine = _RecordingRiskEngine()
 
-    outcomes = HistoricalBacktester(
-        strategy=ContinuationStrategy(), risk_engine=engine
-    ).run([first, second], insights)
+    outcomes = HistoricalBacktester(strategy=ContinuationStrategy(), risk_engine=engine).run(
+        [first, second], insights
+    )
 
     opening_state, second_state = engine.seen
     assert opening_state.positions == ()

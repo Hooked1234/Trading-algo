@@ -55,11 +55,7 @@ class SecDailyIndexProvider:
         payload = await self._fetch(url)
         entries = parse_sec_quarter_index(payload, kind="master")
         return tuple(
-            sorted(
-                entry.accession_number
-                for entry in entries
-                if entry.filed_on == session_date
-            )
+            sorted(entry.accession_number for entry in entries if entry.filed_on == session_date)
         )
 
     async def _fetch(self, url: str) -> bytes:
@@ -103,9 +99,7 @@ class SecDailyIndexProvider:
 def daily_master_index_url(session_date: date) -> str:
     quarter = (session_date.month - 1) // 3 + 1
     stamp = session_date.strftime("%Y%m%d")
-    return (
-        f"{SEC_DAILY_INDEX_ROOT}/{session_date.year}/QTR{quarter}/master.{stamp}.idx"
-    )
+    return f"{SEC_DAILY_INDEX_ROOT}/{session_date.year}/QTR{quarter}/master.{stamp}.idx"
 
 
 __all__ = ["DailyIndexSource", "SecDailyIndexProvider", "daily_master_index_url"]
