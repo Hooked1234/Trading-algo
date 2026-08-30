@@ -95,9 +95,7 @@ def test_forward_paper_results_cannot_be_relabelled_as_historical_oos() -> None:
     )
 
     with pytest.raises(ValueError, match="filing-acceptance sample period"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 def test_registered_test_period_cannot_be_hidden_as_in_sample() -> None:
@@ -105,9 +103,7 @@ def test_registered_test_period_cannot_be_hidden_as_in_sample() -> None:
     trades[0] = trades[0].model_copy(update={"out_of_sample": False})
 
     with pytest.raises(ValueError, match="derived from filing-acceptance sample period"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 def test_research_gate_fails_when_stress_pnl_is_missing() -> None:
@@ -115,9 +111,7 @@ def test_research_gate_fails_when_stress_pnl_is_missing() -> None:
     trades[0] = trades[0].model_copy(
         update={
             "metadata": {
-                key: value
-                for key, value in trades[0].metadata.items()
-                if key != "stress_net_pnl"
+                key: value for key, value in trades[0].metadata.items() if key != "stress_net_pnl"
             }
         }
     )
@@ -156,9 +150,7 @@ def test_research_gate_rejects_duplicate_trade_ids() -> None:
     trades[1] = trades[1].model_copy(update={"trade_id": trades[0].trade_id})
 
     with pytest.raises(ValueError, match="unique trade_id"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 def test_research_gate_rejects_duplicate_event_candidates() -> None:
@@ -168,9 +160,7 @@ def test_research_gate_rejects_duplicate_event_candidates() -> None:
     )
 
     with pytest.raises(ValueError, match=r"unique metadata\.event_id"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 @pytest.mark.parametrize("event_id", [None, "", "   "])
@@ -181,9 +171,7 @@ def test_research_gate_requires_non_empty_event_id(event_id: object) -> None:
     )
 
     with pytest.raises(ValueError, match=r"non-empty metadata\.event_id"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 def test_research_gate_rejects_holding_period_above_sixty_minutes() -> None:
@@ -193,15 +181,15 @@ def test_research_gate_rejects_holding_period_above_sixty_minutes() -> None:
     )
 
     with pytest.raises(ValueError, match="must not exceed 60 minutes"):
-        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-            trades, strategy_version="v1"
-        )
+        ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
 
 def test_research_gate_allows_exactly_sixty_minutes() -> None:
-    ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
+    result = ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
         _passing_trades(), strategy_version="v1"
     )
+    # The boundary has to be allowed, not merely not-crash.
+    assert result.passed
 
 
 def test_model_selection_prioritizes_precision_then_cost() -> None:
@@ -332,9 +320,7 @@ def test_paired_comparison_requires_explicit_event_ids() -> None:
             update={
                 "strategy_variant": "quant",
                 "metadata": {
-                    key: value
-                    for key, value in trade.metadata.items()
-                    if key != "event_id"
+                    key: value for key, value in trade.metadata.items() if key != "event_id"
                 },
             }
         )
@@ -408,15 +394,11 @@ def test_long_and_short_must_each_pass_stability_and_cost_gates() -> None:
     trades = [
         trade.model_copy(
             update={
-                "net_pnl": Decimal("3")
-                if trade.direction is Direction.LONG
-                else Decimal("-1"),
+                "net_pnl": Decimal("3") if trade.direction is Direction.LONG else Decimal("-1"),
                 "metadata": {
                     **trade.metadata,
                     "stress_net_pnl": (
-                        Decimal("1")
-                        if trade.direction is Direction.LONG
-                        else Decimal("-2")
+                        Decimal("1") if trade.direction is Direction.LONG else Decimal("-2")
                     ),
                 },
             }
@@ -424,9 +406,7 @@ def test_long_and_short_must_each_pass_stability_and_cost_gates() -> None:
         for trade in _passing_trades()
     ]
 
-    result = ResearchGateEvaluator(bootstrap_iterations=100).evaluate(
-        trades, strategy_version="v1"
-    )
+    result = ResearchGateEvaluator(bootstrap_iterations=100).evaluate(trades, strategy_version="v1")
 
     short_stress = next(
         check for check in result.checks if check.name == "short_double_cost_stress"
@@ -451,14 +431,9 @@ def test_research_and_paired_pass_flags_cannot_be_hand_edited() -> None:
     source = _passing_trades()[:120]
     paired = paired_variant_improvement(
         [
+            *(trade.model_copy(update={"strategy_variant": "quant"}) for trade in source),
             *(
-                trade.model_copy(update={"strategy_variant": "quant"})
-                for trade in source
-            ),
-            *(
-                trade.model_copy(
-                    update={"strategy_variant": "ai", "net_pnl": Decimal("2")}
-                )
+                trade.model_copy(update={"strategy_variant": "ai", "net_pnl": Decimal("2")})
                 for trade in source
             ),
         ],

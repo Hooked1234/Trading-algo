@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -14,26 +14,24 @@ from .execution import PaperExecutionService
 from .providers.ibkr import IBKRRecoveryIncomplete
 
 
-class StartupExecutionStore(Protocol):
+class PaperRecoveryStore(Protocol):
     async def save_execution_report(self, report: ExecutionReport) -> bool: ...
 
-
-class PaperRecoveryStore(StartupExecutionStore, Protocol):
-    async def save_execution_fill(self, fill: ExecutionFill) -> bool: ...
-
-    async def list_order_intents(
+    async def list_orders_for_reconciliation(
         self, *, limit: int = 1_000
     ) -> tuple[OrderIntent, ...]: ...
 
-    async def get_execution_report(
-        self, order_id: str
-    ) -> ExecutionReport | None: ...
+    async def save_execution_fill(self, fill: ExecutionFill) -> bool: ...
+
+    async def list_order_intents(self, *, limit: int = 1_000) -> tuple[OrderIntent, ...]: ...
+
+    async def get_execution_report(self, order_id: str) -> ExecutionReport | None: ...
 
 
 class RecoverablePaperBroker(Broker, Protocol):
     async def restore_from_storage(
         self,
-        store: object,
+        store: PaperRecoveryStore,
         *,
         max_orders: int = 1_000,
     ) -> tuple[ExecutionReport, ...]: ...
@@ -48,48 +46,7 @@ class PaperRecoveryResult:
     resumed_order_ids: tuple[str, ...]
 
 
-RestoreHook = Callable[[], Awaitable[object]]
 Clock = Callable[[], datetime]
-
-
-class PaperStartupGate:
-    """Restore local state, reconcile broker truth, and persist remote outcomes."""
-
-    def __init__(
-        self,
-        *,
-        broker: Broker,
-        store: StartupExecutionStore,
-        clock: Clock,
-        restore: RestoreHook | None = None,
-        max_portfolio_age: timedelta = timedelta(seconds=10),
-    ) -> None:
-        if max_portfolio_age <= timedelta(0):
-            raise ValueError("startup portfolio age must be positive")
-        self.broker = broker
-        self.store = store
-        self.clock = clock
-        self.restore = restore
-        self.max_portfolio_age = max_portfolio_age
-
-    async def __call__(self) -> None:
-        started_at = self.clock()
-        if started_at.tzinfo is None or started_at.utcoffset() is None:
-            raise RuntimeError("startup clock must be timezone-aware")
-        if self.restore is not None:
-            await self.restore()
-        reconciliation = await asyncio.to_thread(self.broker.reconcile)
-        for report in reconciliation.executions:
-            await self.store.save_execution_report(report)
-        self.broker.readiness().require()
-        portfolio = reconciliation.portfolio
-        if not portfolio.broker_connected or not portfolio.reconciled:
-            raise RuntimeError("broker portfolio is not reconciled")
-        now = self.clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise RuntimeError("startup clock must be timezone-aware")
-        if portfolio.as_of > now or now - portfolio.as_of > self.max_portfolio_age:
-            raise RuntimeError("broker portfolio snapshot is stale or from the future")
 
 
 class PaperRecoveryCoordinator:
@@ -130,9 +87,7 @@ class PaperRecoveryCoordinator:
         self._validate_portfolio(reconciled)
 
         intents = await self.store.list_order_intents(limit=self.max_orders + 1)
-        paper_intents = tuple(
-            intent for intent in intents if intent.submission_mode == "paper"
-        )
+        paper_intents = tuple(intent for intent in intents if intent.submission_mode == "paper")
         if len(intents) > self.max_orders or len(paper_intents) > self.max_orders:
             raise IBKRRecoveryIncomplete(
                 f"more than {self.max_orders} paper orders require recovery"
@@ -155,10 +110,7 @@ class PaperRecoveryCoordinator:
                 ExecutionStatus.FILLED,
                 ExecutionStatus.CANCELLED,
                 ExecutionStatus.REJECTED,
-            } or (
-                latest.status is ExecutionStatus.CANCELLED
-                and intent.reprice_generation == 0
-            )
+            } or (latest.status is ExecutionStatus.CANCELLED and intent.reprice_generation == 0)
             if not should_resume:
                 continue
             await self.execution_service.resume_persisted_workflow(intent, latest)
@@ -172,9 +124,7 @@ class PaperRecoveryCoordinator:
             ExecutionStatus.REJECTED,
         }
         unresolved = tuple(
-            report.order_id
-            for report in final.executions
-            if report.status not in terminal
+            report.order_id for report in final.executions if report.status not in terminal
         )
         if unresolved:
             raise IBKRRecoveryIncomplete(
@@ -213,5 +163,4 @@ class PaperRecoveryCoordinator:
 __all__ = [
     "PaperRecoveryCoordinator",
     "PaperRecoveryResult",
-    "PaperStartupGate",
 ]

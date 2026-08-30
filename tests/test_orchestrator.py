@@ -7,6 +7,7 @@ from event_trader.broker import InMemoryPaperBroker
 from event_trader.domain import Direction, Position
 from event_trader.execution import ExitPolicy, PaperExecutionService
 from event_trader.orchestrator import EventTradingOrchestrator
+from event_trader.preflight import PreflightRejected
 from event_trader.promotion import ResearchPromotionArtifact
 from event_trader.risk import RiskEngine
 from event_trader.strategy import ContinuationStrategy, QuantOnlyContinuationStrategy
@@ -81,7 +82,7 @@ async def _pre_submit_guard(_intent) -> bool:
     return True
 
 
-def _components(long_insight, decision_time):
+def _components(long_insight, decision_time, *, pre_submit_guard=_pre_submit_guard):
     ledger = MemoryLedger()
     broker = InMemoryPaperBroker(
         account_id="DU123456",
@@ -92,7 +93,7 @@ def _components(long_insight, decision_time):
         broker=broker,
         ledger=ledger,
         repricer=_reprice,
-        pre_submit_guard=_pre_submit_guard,
+        pre_submit_guard=pre_submit_guard,
         promotion_artifact_sha256=_promotion(decision_time).artifact_sha256,
         sleep=_no_sleep,
     )
@@ -178,9 +179,7 @@ def test_orchestrator_cannot_bypass_research_gate(long_insight, decision_time) -
         )
 
 
-def test_ai_strategy_cannot_claim_quant_only_promotion_mode(
-    long_insight, decision_time
-) -> None:
+def test_ai_strategy_cannot_claim_quant_only_promotion_mode(long_insight, decision_time) -> None:
     ledger, broker, execution = _components(long_insight, decision_time)
 
     with pytest.raises(ValueError, match="must match"):
@@ -196,9 +195,7 @@ def test_ai_strategy_cannot_claim_quant_only_promotion_mode(
         )
 
 
-def test_quant_only_strategy_cannot_claim_ai_promotion_mode(
-    long_insight, decision_time
-) -> None:
+def test_quant_only_strategy_cannot_claim_ai_promotion_mode(long_insight, decision_time) -> None:
     ledger, broker, execution = _components(long_insight, decision_time)
 
     with pytest.raises(ValueError, match="must match"):
@@ -210,6 +207,38 @@ def test_quant_only_strategy_cannot_claim_ai_promotion_mode(
             broker=broker,
             execution_service=execution,
             account_id="DU123456",
+        )
+
+
+def test_order_capable_orchestrator_requires_a_real_du_account_id(
+    snapshot, long_insight, empty_portfolio, decision_time
+) -> None:
+    """``DU`` as a prefix is not the rule; ``DU<digits>`` is.
+
+    This check was the last place that still tested the prefix alone after the
+    rule was unified, so an id like ``DUMMY123`` passed here while the same id
+    was refused by configuration, composition and the broker adapter.
+    """
+
+    ledger, broker, execution = _components(long_insight, decision_time)
+    snapshot_refresher, portfolio_refresher = _live_refreshers(snapshot, empty_portfolio)
+    with pytest.raises(ValueError, match="DU account"):
+        EventTradingOrchestrator(
+            insight_provider=StaticInsightProvider(long_insight),
+            strategy=ContinuationStrategy(),
+            risk_engine=RiskEngine(),
+            ledger=ledger,
+            broker=broker,
+            execution_service=execution,
+            account_id="DUMMY123",
+            promotion_artifact=_promotion(decision_time),
+            runtime_experiment_manifest_sha256="a" * 64,
+            runtime_dataset_manifest_sha256="b" * 64,
+            runtime_code_revision_sha256="c" * 64,
+            snapshot_refresher=snapshot_refresher,
+            portfolio_refresher=portfolio_refresher,
+            decision_clock=lambda: decision_time,
+            execution_enabled=True,
         )
 
 
@@ -269,6 +298,46 @@ async def test_paper_path_cancels_then_reprices_once(
     assert outcome.order_intent.submission_mode == "paper"
     assert len(ledger.intents) == 2
     assert sum(order_id.endswith("-r1") for order_id in ledger.intents) == 1
+
+
+@pytest.mark.asyncio
+async def test_live_preflight_rejection_becomes_terminal_pipeline_outcome(
+    snapshot, long_insight, empty_portfolio, decision_time
+) -> None:
+    async def reject(_intent) -> bool:
+        raise PreflightRejected(("MARKET_DATA_STALE", "MAX_POSITIONS"))
+
+    ledger, broker, execution = _components(
+        long_insight,
+        decision_time,
+        pre_submit_guard=reject,
+    )
+    snapshot_refresher, portfolio_refresher = _live_refreshers(snapshot, empty_portfolio)
+    orchestrator = EventTradingOrchestrator(
+        insight_provider=StaticInsightProvider(long_insight),
+        strategy=ContinuationStrategy(),
+        risk_engine=RiskEngine(),
+        ledger=ledger,
+        broker=broker,
+        execution_service=execution,
+        account_id="DU123456",
+        promotion_artifact=_promotion(decision_time),
+        runtime_experiment_manifest_sha256="a" * 64,
+        runtime_dataset_manifest_sha256="b" * 64,
+        runtime_code_revision_sha256="c" * 64,
+        snapshot_refresher=snapshot_refresher,
+        portfolio_refresher=portfolio_refresher,
+        decision_clock=lambda: decision_time,
+        execution_enabled=True,
+    )
+
+    outcome = await orchestrator.process(snapshot, empty_portfolio, now=decision_time)
+
+    assert outcome.stage == "preflight_rejected"
+    assert outcome.reasons == ("MARKET_DATA_STALE", "MAX_POSITIONS")
+    assert outcome.order_intent is not None
+    assert ledger.intents == {}
+    assert not broker.reports
 
 
 @pytest.mark.asyncio

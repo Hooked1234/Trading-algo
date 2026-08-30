@@ -149,6 +149,52 @@ async def test_paper_runtime_wires_promotion_preflight_and_recovery(
 
 
 @pytest.mark.asyncio
+async def test_paper_runtime_refuses_a_non_authoritative_client_id(
+    tmp_path, snapshot, decision_time
+) -> None:
+    """A wrong client id is a configuration fault, not a readiness surprise.
+
+    Readiness would refuse this session as well, but only after connecting and
+    with a message about order scope.  The composition root owns the paper-only
+    invariants, so it names the actual cause before any transport is touched.
+    """
+
+    settings = Settings(
+        paper_account_id="DU123456",
+        allowed_paper_accounts=("DU123456",),
+        state_db_path=tmp_path / "state.sqlite",
+        raw_data_dir=tmp_path / "raw",
+        report_dir=tmp_path / "reports",
+        ibkr_client_id=71,
+    )
+    broker = SimpleNamespace(account_id="DU123456")
+    sec = SQLiteSecReconciliationLedger(tmp_path / "sec.sqlite")
+
+    async def market_provider(_symbol, _now):
+        return snapshot.market.model_copy(update={"market_data_live": True})
+
+    async with _store(tmp_path, decision_time) as store:
+        with pytest.raises(ValueError, match="client id 0"):
+            build_paper_runtime(
+                settings,
+                store=store,
+                poller=SilentPoller(),
+                snapshot_factory=StaticSnapshotFactory(snapshot),
+                broker=broker,  # type: ignore[arg-type]
+                market_provider=market_provider,
+                sec_reconciliation=sec,
+                promotion_artifact=_paper_promotion(decision_time),
+                runtime_experiment_manifest_sha256="a" * 64,
+                runtime_dataset_manifest_sha256="b" * 64,
+                runtime_code_revision_sha256="c" * 64,
+                clock=lambda: decision_time,
+                use_lease=False,
+            )
+
+    sec.close()
+
+
+@pytest.mark.asyncio
 async def test_shadow_cycle_records_an_outcome_without_touching_the_broker(
     tmp_path, snapshot, long_insight, decision_time
 ) -> None:
@@ -189,9 +235,7 @@ async def test_shadow_cycle_records_an_outcome_without_touching_the_broker(
 
 
 @pytest.mark.asyncio
-async def test_quant_only_shadow_stores_no_insight(
-    tmp_path, snapshot, decision_time
-) -> None:
+async def test_quant_only_shadow_stores_no_insight(tmp_path, snapshot, decision_time) -> None:
     settings = _settings(tmp_path)
     async with _store(tmp_path, decision_time) as store:
         await store.save_filing_event(snapshot.filing)
@@ -212,9 +256,7 @@ async def test_quant_only_shadow_stores_no_insight(
 
 
 @pytest.mark.asyncio
-async def test_every_outbox_event_ends_terminally(
-    tmp_path, snapshot, decision_time
-) -> None:
+async def test_every_outbox_event_ends_terminally(tmp_path, snapshot, decision_time) -> None:
     settings = _settings(tmp_path)
     async with _store(tmp_path, decision_time) as store:
         await store.save_filing_event(snapshot.filing)
@@ -238,9 +280,12 @@ async def test_every_outbox_event_ends_terminally(
         # Unavailable market data is a typed, retryable failure — never a trade.
         assert result.entry_outcomes == ()
         assert await store.count_outbox(published=False) == 1
-        assert await store.get_pipeline_outcome(
-            snapshot.filing.event_id, runtime.session.strategy_version
-        ) is None
+        assert (
+            await store.get_pipeline_outcome(
+                snapshot.filing.event_id, runtime.session.strategy_version
+            )
+            is None
+        )
 
 
 @pytest.mark.asyncio

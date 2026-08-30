@@ -21,17 +21,14 @@ from .domain import (
     PortfolioState,
     Signal,
 )
+from .execution import PreSubmitGuardRejected
 from .reconciliation import SQLiteSecReconciliationLedger
 from .risk import RiskEngine
 from .strategy import ContinuationStrategy
 
 
-class PreflightRejected(RuntimeError):
+class PreflightRejected(PreSubmitGuardRejected):
     """The order was not sent because a last-moment invariant failed."""
-
-    def __init__(self, reasons: tuple[str, ...]) -> None:
-        self.reasons = reasons
-        super().__init__(", ".join(reasons))
 
 
 class PreflightLedger(Protocol):
@@ -111,9 +108,7 @@ class LiveOrderPreflight:
                 {
                     **signal.model_dump(),
                     "entry_limit": (
-                        market.quote.ask
-                        if intent.side is OrderSide.BUY
-                        else market.quote.bid
+                        market.quote.ask if intent.side is OrderSide.BUY else market.quote.bid
                     ),
                 }
             )
@@ -194,9 +189,7 @@ class LiveOrderPreflight:
             return ["EXIT_POSITION_NOT_FOUND"]
         position = positions[0]
         expected_side = (
-            OrderSide.SELL
-            if position.direction is Direction.LONG
-            else OrderSide.BUY_TO_COVER
+            OrderSide.SELL if position.direction is Direction.LONG else OrderSide.BUY_TO_COVER
         )
         reasons: list[str] = []
         if intent.side is not expected_side:

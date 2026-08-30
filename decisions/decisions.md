@@ -1,82 +1,5 @@
 # Architecture decisions
 
-## ADR-020 — Das Schema trägt seine Version in der Datenbank
-
-Status: accepted, 2026-08-28.
-
-Der operative Zustand ist die einzige Quelle, aus der ein Neustart offene Orders
-rekonstruiert. Ein Schema, das nur aus `CREATE TABLE IF NOT EXISTS` besteht,
-kann eine ältere Datei nicht von einer vollständigen unterscheiden. Ab jetzt
-führt `PRAGMA user_version` eine geordnete Migrationskette; jeder Schritt läuft
-in einer Transaktion. Eine Datenbank mit höherer Version als der Code wird nicht
-geöffnet, und ein Store, der seine Schemaversion nicht garantieren kann,
-schließt seine Verbindung, statt halb geöffnet weiterzulaufen.
-
-## ADR-021 — Fills sind eigene unveränderliche Zeilen
-
-Status: accepted, 2026-08-28.
-
-`ExecutionReport` trägt nur das Aggregat. Menge, Preis und Kommission eines
-einzelnen Ausführungsereignisses sind ausschließlich im Fill zusammen bekannt,
-deshalb ist `ExecutionFill` mit der `execId` des Brokers als Identität eine
-eigene Zeile. Ein nach Reconnect erneut gelieferter Fill ist ein No-op statt
-eines Fehlers. Die Kommission kommt in einem eigenen späteren Callback und ist
-der einzige Wert, den ein gespeicherter Fill noch gewinnen darf — genau einmal.
-Jede andere Abweichung unter derselben `execId` bedeutet zwei verschiedene
-Tatsachen unter einer Identität und wird nie durch Überschreiben aufgelöst.
-Umgekehrt darf ein Aggregat hinter seinen Fills zurückliegen: `orderStatus`
-meldet eine kumulierte Menge, ohne die Fills zu nennen, aus denen sie entstand.
-
-## ADR-022 — Die Herkunft einer Ersatzorder ist ein Feld, kein Schlüssel-Suffix
-
-Status: accepted, 2026-08-28.
-
-Der einzige erlaubte Reprice war bisher nur am Suffix `:r1` des
-Idempotenzschlüssels erkennbar. Eine Sicherheitsregel, die von einer
-Zeichenkette abhängt, hält keinem Refactoring stand. `OrderIntent` benennt jetzt
-mit `replaces_order_id` und `reprice_generation` explizit, welche Order ersetzt
-wird; eine zweite Generation ist durch den Vertrag ausgeschlossen. Das Suffix
-bleibt als dauerhafter Nachschlage-Handle bestehen, ist aber nicht länger die
-Wahrheit. Bestehende Datenbanken werden beim Öffnen einmalig nachgezogen; eine
-Ersatzorder ohne persistierten Vorgänger lässt die Migration fail-closed
-scheitern.
-
-## ADR-023 — Readiness ist operationsspezifisch
-
-Status: accepted, 2026-08-28.
-
-Submit, Exit, Cancel und Reconcile haben unterschiedliche Sicherheitsbedürfnisse.
-Ein festes Ausschluss-Set in einzelnen Methoden ist nicht auditierbar und kann bei
-einer neuen Prüfung unbemerkt veralten. Der Broker wertet daher zentral ein explizites
-Profil aus. Reconcile darf den noch nicht reconciled Zustand herstellen; Cancel muss
-auch ohne Live-Marktdaten möglich bleiben; Entry-Submit verlangt zusätzlich bestätigte
-Marktdaten und abgeschlossene Recovery. Exit verlangt frische Broker- und Marktdaten,
-aber darf nicht an einer nur für neue Entries geltenden Recovery-Sperre scheitern.
-
-## ADR-024 — Broker-Callbacks ergänzen Tatsachen nur monoton
-
-Status: accepted, 2026-08-28.
-
-`orderStatus` ist ein kumulatives, wiederholbares Signal und keine alleinige Wahrheit
-über einzelne Ausführungen. `execDetails.execId` identifiziert deshalb die Fill-
-Tatsachen; `commissionReport.execId` finalisiert genau deren Kosten. Ein verspäteter
-Callback darf Menge, Fill-Zahl, Gebühr oder Sequenz nie verkleinern. Identische Replays
-sind No-ops, eine widersprüchliche Wiederverwendung derselben Identität sperrt die
-Reconciliation, und ein terminaler Report darf nachträglich nur noch zusätzliche
-Fill- oder Kommissionsevidenz gewinnen.
-
-## ADR-025 — Paper-Start und Exit folgen unmittelbar der Broker-Wahrheit
-
-Status: accepted, 2026-08-28.
-
-Der Paper-Prozess beginnt immer mit Restore, autoritativem Broker-Reconcile,
-Persistenz und erst danach einer begrenzten Wiederaufnahme. Fehlende Bestätigung ist
-ein manueller Hold und niemals ein Anlass zum Resubmit. Unmittelbar vor jedem Exit wird
-die Brokerposition erneut geladen und muss Symbol, Richtung und Menge des Exit-Intents
-exakt bestätigen. `run-paper` ist die einzige orderfähige Composition Root und wird nur
-mit DU-Paper-Konto, passendem Promotion-Artefakt, identischen Laufzeit-Manifests und
-aktivem Live-Preflight gebaut.
-
 ## ADR-001 — Deterministic Python control plane
 
 Status: accepted, 2026-08-25.
@@ -253,3 +176,124 @@ the exit supervisor run as separate supervised tasks, so a thirty-second model
 timeout cannot delay the one-second exit tick. A SQLite singleton lease refuses a
 second daemon on the same state, and a critical failure in any task blocks new
 entries only — exit supervision and warnings keep running.
+
+## ADR-020 — The database carries its schema version
+
+Status: accepted, 2026-08-28.
+
+Operational state is the only source from which a restart reconstructs open orders.
+A schema based only on `CREATE TABLE IF NOT EXISTS` cannot distinguish an older file
+from a complete one. `PRAGMA user_version` therefore drives an ordered migration
+chain, with every step running in a transaction. The application refuses to open a
+database whose version is newer than the code, and a store that cannot guarantee its
+schema version closes its connection instead of continuing in a partially opened
+state.
+
+## ADR-021 — Fills are separate immutable rows
+
+Status: accepted, 2026-08-28.
+
+`ExecutionReport` carries only the aggregate. The quantity, price and commission of
+one execution event are known together only in the fill, so `ExecutionFill` is stored
+as its own row, identified by the broker's `execId`. A fill delivered again after a
+reconnect is a no-op rather than an error. Commission arrives in a separate, later
+callback and is the only value a stored fill may gain, exactly once. Any other
+difference under the same `execId` represents two facts under one identity and is
+never resolved by overwriting. Conversely, an aggregate may lag its fills:
+`orderStatus` reports a cumulative quantity without naming the fills that produced it.
+
+## ADR-022 — Replacement-order provenance is a field, not a key suffix
+
+Status: accepted, 2026-08-28.
+
+The single permitted reprice was previously recognizable only by the `:r1` suffix of
+the idempotency key. A safety rule that depends on a string cannot survive refactoring.
+`OrderIntent` now uses `replaces_order_id` and `reprice_generation` to state explicitly
+which order it replaces, and the contract forbids a second generation. The suffix
+remains as a durable lookup handle, but it is no longer the source of truth. Existing
+databases are migrated once when opened; a replacement order without a persisted
+predecessor makes the migration fail closed.
+
+## ADR-023 — Readiness is operation-specific
+
+Status: accepted, 2026-08-28.
+
+Submit, Exit, Cancel and Reconcile have different safety requirements. Fixed exclusion
+sets scattered across methods are not auditable and can silently become stale when a
+new check is introduced. The broker therefore evaluates an explicit profile centrally.
+Reconcile may establish the not-yet-reconciled state; Cancel must remain possible
+without live market data; entry submission additionally requires confirmed market data
+and completed recovery. Exit requires fresh broker and market data but must not fail on
+a recovery block that applies only to new entries.
+
+Every profile shares one mandatory set: a `DU<digits>` account id, the optional `ibapi`
+dependency, an open connection, the allowlisted account being present in the session,
+and an authoritative order scope — which binds paper mode to client id 0. Cancel adds
+`reconciled` to that set. That has a consequence worth naming: a latched callback fault
+makes the next reconciliation fail, which clears `reconciled`, so a cancel is possible
+until that attempt and not afterwards. Whether a purely exposure-reducing cancel should
+outlive its session is an open question for a later revision of this decision.
+
+## ADR-024 — Broker callbacks only add facts monotonically
+
+Status: accepted, 2026-08-28.
+
+`orderStatus` is a cumulative, repeatable signal, not the sole truth about individual
+executions. `execDetails.execId` therefore identifies fill facts, and
+`commissionReport.execId` finalizes their exact costs. A delayed callback may never
+reduce quantity, fill count, fees or sequence. Identical replays are no-ops; conflicting
+reuse of the same identity blocks reconciliation; and a terminal report may gain only
+additional fill or commission evidence afterward.
+
+See ADR-026 for what happens when a callback cannot be turned into a fact at all.
+
+## ADR-025 — Paper startup and exits follow broker truth immediately
+
+Status: accepted, 2026-08-28.
+
+The paper process always starts with restore, authoritative broker reconciliation and
+persistence, followed only then by bounded resumption. Missing confirmation creates a
+manual hold and is never a reason to resubmit. Immediately before every exit, the broker
+position is fetched again and must exactly confirm the exit intent's symbol, direction
+and quantity. `run-paper` is the only order-capable composition root and is built only
+with a DU paper account, the matching promotion artifact, identical runtime manifests
+and active live preflight.
+
+
+## ADR-026 — A broken callback latches instead of killing the reader thread
+
+Status: accepted, 2026-08-29.
+
+`EClient.run` catches only `KeyboardInterrupt`, `SystemExit` and `BadMessage`. Any other
+error ends the reader thread — and with it every further order, fill and cancel callback.
+That was fail-closed only by accident: the thread's `finally` disconnects, and the
+`connected` check then refuses every later operation.
+
+Catching such an error is therefore not free. Handling it must not be cheaper than
+crashing was, so the fault is latched: `ready_for_orders()` turns false and
+`reconcile_orders()` refuses as its very first check, because a callback layer that
+cannot build a fact invalidates everything the session could report. The latch is
+monotone and has no reset; the session has to be rebuilt.
+
+A discarded callback is a weaker case and is only remembered: outside a reconciliation
+window it lands in a deferred set that the next reconciliation folds into its result.
+An aborted reconciliation hands those tokens back rather than deciding anything.
+
+
+## ADR-027 — One normalization for every computed amount
+
+Status: accepted, 2026-08-29.
+
+`Money` permits eight decimal places and twenty digits. Decimal division and float
+conversion both work at the context precision of twenty-eight, so any amount derived
+from a broker value — a weighted average fill price, a VWAP, an average cost — leaves
+that contract by construction rather than by accident.
+
+`domain.money()` is the single place that puts such an amount back onto the contract.
+An amount that cannot be represented at all raises `InvalidOperation`, which is an
+`ArithmeticError` and therefore already fail-closed in every broker parsing path. It is
+refused, never rounded into something plausible.
+
+The rule is deliberately narrow: `money()` never accepts a value the model would have
+rejected, so it moves an existing refusal earlier and gives it a clearer cause. It does
+not create a new failure mode.

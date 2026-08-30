@@ -65,13 +65,42 @@
 - IBKR-Bar-Callbacks: unvollständige Historie bleibt unsichtbar, eine Teilminute wird
   nie veröffentlicht, ein Request-Fehler entwertet die Historie.
 
+## Lokale Qualitätsroutine
+
+Vor jedem Abschluss werden Formatierung, Lint und die vollständige Testsuite in dieser
+Reihenfolge ausgeführt:
+
+```bash
+uv run ruff format .
+uv run ruff check .
+uv run pytest --cov=event_trader --cov-branch --cov-report=term-missing
+```
+
 ## Coverage-Regel
 
 Der lokale Build erzwingt mindestens 82 % Branch-Coverage über den testbaren Kern.
 CLI-Verdrahtung und Logging sind aus dieser Kennzahl ausgenommen; sie werden über
-Smoke-Tests geprüft. Der native IBKR-Socket-/Callback-Layer ist markiert, weil seine
-vollständige Prüfung eine echte lokale IB-Gateway-Paper-Sitzung erfordert. Broker-
-Adapter, Zustandsmaschine und Recovery-Logik bleiben Bestandteil der Coverage.
+Smoke-Tests geprüft.
+
+Ausgenommen sind nur noch die drei Methoden, die ohne laufendes IB Gateway nicht
+ausführbar sind — `connect`, `submit_order` und `portfolio_state` von
+`NativeIBAPIBackend` — sowie die Import-Guards des optionalen `ibapi`-Extras. Die
+Callback-Reduzierer (`_on_order_status`, `_on_exec_details`, `_on_commission_report`,
+`_on_remote_order`, `_on_portfolio`) tragen die Order- und Fill-Wahrheit des Systems
+und werden gemessen; sie sind ohne Socket über `NativeIBAPIBackend.without_transport()`
+direkt aufrufbar.
+
+Bis 28.08.2026 lag `# pragma: no cover` auf der gesamten Klasse und nahm damit rund
+830 Zeilen aus Zähler *und* Nenner. Die gemeldete Zahl beschrieb den sicherheits-
+kritischsten Teil von Gate C also gar nicht — genau dort verbarg sich ein
+reproduzierbarer Aggregationsfehler bei mehreren Fills. Die Einschränkung des Pragmas
+kostet rund einen Prozentpunkt; das ist der Preis für eine Kennzahl, die hält, was sie
+behauptet.
+
+**Coverage ist kein Abnahmekriterium für Korrekturen in diesem Layer.** Solange ein
+Pragma greift, kann ein Test grün sein, ohne die Zahl zu bewegen. Maßgeblich sind die
+Regressionstests selbst und die Mutationsprobe: jede zurückgenommene Normalisierung und
+jeder entfernte Fail-closed-Pfad muss mindestens einen Test rot färben.
 
 ## Externe Abnahme
 

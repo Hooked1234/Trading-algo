@@ -31,13 +31,9 @@ class ExecutionLedger(Protocol):
 
     async def save_execution_fill(self, fill: ExecutionFill) -> bool: ...
 
-    async def get_order_intent_by_key(
-        self, idempotency_key: str
-    ) -> OrderIntent | None: ...
+    async def get_order_intent_by_key(self, idempotency_key: str) -> OrderIntent | None: ...
 
-    async def get_execution_report(
-        self, order_id: str
-    ) -> ExecutionReport | None: ...
+    async def get_execution_report(self, order_id: str) -> ExecutionReport | None: ...
 
 
 Repricer = Callable[[str, OrderSide], Awaitable[Decimal]]
@@ -51,6 +47,12 @@ class ExecutionError(RuntimeError):
 
 class PreSubmitGuardRejected(ExecutionError):
     """A last-moment market or risk check rejected an order."""
+
+    def __init__(self, reasons: tuple[str, ...] | str) -> None:
+        # Re-raising from ``args`` would otherwise hand a single string back in,
+        # and joining a string splits it into characters.
+        self.reasons = (reasons,) if isinstance(reasons, str) else tuple(reasons)
+        super().__init__(", ".join(self.reasons))
 
 
 class ExecutionReconciliationError(ExecutionError):
@@ -148,10 +150,7 @@ class PaperExecutionService:
             latest = await self.reconcile_order(intent.order_id)
             reports.append(latest)
         if latest.status in TERMINAL_STATUSES:
-            if (
-                latest.status is ExecutionStatus.CANCELLED
-                and not self._is_replacement(intent)
-            ):
+            if latest.status is ExecutionStatus.CANCELLED and not self._is_replacement(intent):
                 reports.extend(await self.resume_reprice_after_cancel(intent, latest))
             return tuple(reports)
 
@@ -187,28 +186,21 @@ class PaperExecutionService:
         if remaining_quantity <= 0:
             return ()
         replacement_key = f"{intent.idempotency_key}:r1"
-        existing_loader = getattr(self.ledger, "get_order_intent_by_key", None)
-        if callable(existing_loader):
-            existing = await existing_loader(replacement_key)
-            if existing is not None:
-                if (
-                    existing.reprice_generation != 1
-                    or existing.replaces_order_id != intent.order_id
-                    or existing.quantity != remaining_quantity
-                    or existing.side is not intent.side
-                    or existing.symbol != intent.symbol
-                ):
-                    raise ReplacementSafetyError(
-                        "persisted replacement does not match its cancelled predecessor"
-                    )
-                report_loader = getattr(self.ledger, "get_execution_report", None)
-                latest = (
-                    await report_loader(existing.order_id)
-                    if callable(report_loader)
-                    else None
+        existing = await self.ledger.get_order_intent_by_key(replacement_key)
+        if existing is not None:
+            if (
+                existing.reprice_generation != 1
+                or existing.replaces_order_id != intent.order_id
+                or existing.quantity != remaining_quantity
+                or existing.side is not intent.side
+                or existing.symbol != intent.symbol
+            ):
+                raise ReplacementSafetyError(
+                    "persisted replacement does not match its cancelled predecessor"
                 )
-                resumed = await self.resume_persisted_workflow(existing, latest)
-                return resumed or ((latest,) if latest is not None else ())
+            latest = await self.ledger.get_execution_report(existing.order_id)
+            resumed = await self.resume_persisted_workflow(existing, latest)
+            return resumed or ((latest,) if latest is not None else ())
         new_price = await self.repricer(intent.symbol, intent.side)
         replacement_data = intent.model_dump()
         replacement_data.update(
@@ -227,9 +219,7 @@ class PaperExecutionService:
         replacement_report = await self._submit_persisted(replacement)
         reports.append(replacement_report)
         if replacement_report.status not in TERMINAL_STATUSES:
-            reports.extend(
-                await self._complete_open_order(replacement, allow_reprice=False)
-            )
+            reports.extend(await self._complete_open_order(replacement, allow_reprice=False))
         return tuple(reports)
 
     async def _complete_open_order(
@@ -254,9 +244,7 @@ class PaperExecutionService:
             reports.extend(await self.resume_reprice_after_cancel(intent, terminal))
         return tuple(reports)
 
-    async def _cancel_until_terminal(
-        self, order_id: str
-    ) -> tuple[ExecutionReport, ...]:
+    async def _cancel_until_terminal(self, order_id: str) -> tuple[ExecutionReport, ...]:
         """Issue one idempotent cancel and require bounded broker confirmation."""
 
         reports: list[ExecutionReport] = []
@@ -279,10 +267,8 @@ class PaperExecutionService:
         """Refresh and persist one known order without submitting it."""
 
         reconciliation = self.broker.reconcile()
-        fill_writer = getattr(self.ledger, "save_execution_fill", None)
-        if callable(fill_writer):
-            for fill in reconciliation.fills:
-                await fill_writer(fill)
+        for fill in reconciliation.fills:
+            await self.ledger.save_execution_fill(fill)
         found: ExecutionReport | None = None
         for report in reconciliation.executions:
             await self.ledger.save_execution_report(report)
@@ -301,14 +287,10 @@ class PaperExecutionService:
             if self._pre_submit_guard is not None:
                 allowed = await self._pre_submit_guard(intent)
                 if allowed is not True:
-                    raise PreSubmitGuardRejected(
-                        f"pre-submit guard rejected order {intent.order_id!r}"
-                    )
+                    raise PreSubmitGuardRejected(("PRE_SUBMIT_GUARD_REJECTED",))
             created = await self.ledger.save_order_intent(intent)
             if not created:
-                raise OrderIntentClaimLost(
-                    f"order intent {intent.order_id!r} was already claimed"
-                )
+                raise OrderIntentClaimLost(f"order intent {intent.order_id!r} was already claimed")
             report = self.broker.submit(intent)
         await self.ledger.save_execution_report(report)
         return report
@@ -335,6 +317,7 @@ class PaperExecutionService:
                 f"order {intent.order_id!r} lacks the configured research promotion"
             )
 
+
 class ExitPolicy:
     def __init__(self, calendar: NyseSessionCalendar | None = None) -> None:
         self.calendar = calendar or NyseSessionCalendar()
@@ -358,9 +341,7 @@ class ExitPolicy:
             raise ValueError("position direction must match signal direction")
         if self.calendar.force_flat_due(now):
             return "FORCE_FLAT_1555"
-        holding_deadline = signal.decided_at + timedelta(
-            minutes=signal.holding_minutes
-        )
+        holding_deadline = signal.decided_at + timedelta(minutes=signal.holding_minutes)
         if now >= min(signal.expires_at, holding_deadline):
             return "TIME_EXIT"
         if signal.direction is Direction.LONG and market.last <= signal.stop_price:

@@ -54,5 +54,42 @@
   artifact, runtime manifests and live preflight.
 - Added an automated schema inventory check for the exactly 16 operational tables and
   removed obsolete local Temp-workaround documentation and artifacts.
-- Now 474 deterministic, contract, property, replay and recovery tests with 83.57 %
-  branch coverage.
+- Added `domain.money()` as the single normalization for every computed amount, and
+  applied it across the IBKR callback, bar, quote, portfolio and composition paths.
+  An unrepresentable amount now raises `ArithmeticError`, which those paths already
+  treat as a fail-closed fact.
+- Fixed an unnormalized weighted average fill price that raised a `ValidationError`
+  inside the IBKR reader thread for any multi-fill order whose average did not divide
+  evenly, and five further occurrences of the same pattern.
+- Replaced the non-validating `model_copy` commission finalization with a validating
+  construction.
+- Added a broker callback fault latch: a callback that cannot build a valid fact makes
+  `ready_for_orders()` false and `reconcile_orders()` refuse, reproducing the
+  fail-closed effect that a raised callback used to have by killing the reader thread.
+- Callbacks discarded outside a reconciliation window are remembered and folded into
+  the next one instead of vanishing, and a contract failure in `updatePortfolio` no
+  longer drops a whole position behind a blanket `except`.
+- Changed the default IBKR client id to 0 and made `build_paper_runtime` refuse any
+  other value; only client 0 observes manual and API orders in one authoritative scope.
+- Unified the `DU<digits>` paper-account rule in one strict function; configuration and
+  composition previously accepted any `DU` prefix.
+- Removed `PaperStartupGate`, `_ensure_execution_state()` and the internal `getattr`
+  fallbacks, and replaced five `object.__new__` test doubles with
+  `NativeIBAPIBackend.without_transport()`.
+- Narrowed `# pragma: no cover` from the whole native backend to the three methods that
+  need a live Gateway, so the callback reducers that carry order and fill truth are
+  measured. The reported branch coverage fell about one point as a result.
+- Made an aborted IBKR reconciliation lossless and repeatable: remembered discards are
+  handed back instead of vanishing with the failed run, and the session no longer stays
+  marked as reconciling after a single timeout.
+- Applied the strict `DU<digits>` rule in the orchestrator, which was the last check
+  still accepting any `DU` prefix, and moved the client-id-0 requirement ahead of the
+  market stack so paper mode refuses before opening a Gateway connection.
+- Covered the pre-submit market re-check, which previously carried no test at all:
+  removing it left the whole suite green. All ten of its rejection reasons are now
+  asserted, and the three that the strategy and risk engine also emit are asserted on
+  the exit path, where only the guard can produce them.
+- Recorded the callback fault latch and the single `money()` normalization as ADR-026
+  and ADR-027, and completed ADR-023 with the shared mandatory readiness set.
+- Now 501 deterministic, contract, property, replay and recovery tests with 82.88 %
+  branch coverage, `ruff check` and `ruff format` clean.

@@ -5,13 +5,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from itertools import pairwise
 
 import exchange_calendars as xcals
 from pydantic import Field
 
-from .domain import Bar, FrozenModel
+from .domain import Bar, FrozenModel, money
 from .indicators import (
     average_true_range,
     beta_adjusted_return_z,
@@ -144,14 +144,14 @@ def compute_market_features(inputs: FeatureInputs) -> PrecomputedMarketFeatures:
         symbol=symbol,
         as_of=as_of,
         last=last_price,
-        session_vwap=_money(session_vwap(inputs.session_one_minute_bars)),
-        median_dollar_volume_20d=_money(median_dollar_volume),
+        session_vwap=money(session_vwap(inputs.session_one_minute_bars)),
+        median_dollar_volume_20d=money(median_dollar_volume),
         beta_adjusted_return_z=z_score,
         relative_volume=relative_volume(
             current_volume,
             [observation.value for observation in inputs.same_slot_volumes],
         ),
-        atr_5m=_money(average_true_range(atr_bars)),
+        atr_5m=money(average_true_range(atr_bars)),
     )
 
 
@@ -179,8 +179,7 @@ def build_feature_inputs(
         opening, closing = _session_bounds(session_date)
         minute_count = int((closing - opening).total_seconds() // 60)
         minute_ends = tuple(
-            opening + timedelta(minutes=minute)
-            for minute in range(1, minute_count + 1)
+            opening + timedelta(minutes=minute) for minute in range(1, minute_count + 1)
         )
         daily_bars.append(_aggregate_bars(_bars_at(asset, minute_ends, "daily history")))
 
@@ -195,9 +194,7 @@ def build_feature_inputs(
         asset_returns.append(
             PointInTimeReturn(timestamp=timestamp, value=_window_return(asset_window))
         )
-        spy_returns.append(
-            PointInTimeReturn(timestamp=timestamp, value=_window_return(spy_window))
-        )
+        spy_returns.append(PointInTimeReturn(timestamp=timestamp, value=_window_return(spy_window)))
         same_slot_volumes.append(
             PointInTimeVolume(
                 timestamp=timestamp,
@@ -214,9 +211,7 @@ def build_feature_inputs(
             timestamp=asset_observation.timestamp,
             value=asset_observation.value - beta * spy_observation.value,
         )
-        for asset_observation, spy_observation in zip(
-            asset_returns, spy_returns, strict=True
-        )
+        for asset_observation, spy_observation in zip(asset_returns, spy_returns, strict=True)
     )
 
     atr_bars = tuple(
@@ -306,7 +301,7 @@ def _aggregate_bars(bars: Sequence[Bar]) -> Bar:
         low=min(bar.low for bar in bars),
         close=last.close,
         volume=volume,
-        vwap=_money(weighted_value / volume) if volume else last.close,
+        vwap=money(weighted_value / volume) if volume else last.close,
         source=first.source,
         feed=first.feed,
     )
@@ -314,10 +309,6 @@ def _aggregate_bars(bars: Sequence[Bar]) -> Bar:
 
 def _window_return(bars: Sequence[Bar]) -> float:
     return float(bars[-1].close / bars[0].open - Decimal("1"))
-
-
-def _money(value: Decimal) -> Decimal:
-    return value.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
 
 
 def _require_strictly_increasing(bars: Sequence[Bar], name: str) -> None:

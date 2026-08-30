@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -15,6 +15,7 @@ from event_trader.domain import (
     OrderSide,
     PortfolioState,
     Quote,
+    money,
 )
 
 
@@ -68,9 +69,7 @@ def test_portfolio_rejects_peak_nav_below_current_nav(empty_portfolio) -> None:
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
-def test_market_snapshot_rejects_non_finite_quant_features(
-    long_market, invalid: float
-) -> None:
+def test_market_snapshot_rejects_non_finite_quant_features(long_market, invalid: float) -> None:
     payload = long_market.model_dump()
     payload["beta_adjusted_return_z"] = invalid
 
@@ -146,9 +145,7 @@ def test_execution_fill_rejects_a_commission_the_broker_has_not_confirmed(
     with pytest.raises(ValidationError, match="reports it as final"):
         ExecutionFill.model_validate(payload)
 
-    final = ExecutionFill.model_validate(
-        {**payload, "commission_final": True}
-    )
+    final = ExecutionFill.model_validate({**payload, "commission_final": True})
     assert final.commission == Decimal("0.35")
 
 
@@ -234,3 +231,20 @@ def test_order_intent_forbids_a_second_reprice_generation(decision_time) -> None
 
     with pytest.raises(ValidationError):
         OrderIntent.model_validate(payload)
+
+
+def test_money_refuses_an_amount_it_cannot_represent() -> None:
+    """An unrepresentable amount is refused, never rounded into something plausible.
+
+    Every broker callback treats ``ArithmeticError`` as a fail-closed fact, so
+    the guard has to raise inside that hierarchy rather than return a value the
+    contract would reject one layer later.
+    """
+
+    assert money(Decimal("10.006666666666666666")) == Decimal("10.00666667")
+    assert money(Decimal("999999999999.99999999")) == Decimal("999999999999.99999999")
+
+    with pytest.raises(InvalidOperation):
+        money(Decimal("9999999999999.99999999"))
+    with pytest.raises(ArithmeticError):
+        money(Decimal("1E+30"))

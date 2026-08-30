@@ -6,8 +6,9 @@ consume the same timestamped facts instead of silently mutating state in place.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -23,6 +24,44 @@ from pydantic import (
 Money = Annotated[Decimal, Field(gt=Decimal("0"), max_digits=20, decimal_places=8)]
 NonNegativeMoney = Annotated[Decimal, Field(ge=Decimal("0"), max_digits=20, decimal_places=8)]
 UtcTimestamp = AwareDatetime
+
+MONEY_EXPONENT = Decimal("0.00000001")
+MONEY_MAX_DIGITS = 20
+
+PAPER_ACCOUNT_PATTERN = re.compile(r"DU\d+", re.IGNORECASE)
+
+
+def is_paper_account_id(account_id: str) -> bool:
+    """Whether an id has the IBKR paper-account shape ``DU<digits>``.
+
+    The shape is necessary but never sufficient: an account still has to be in
+    the explicit allowlist.  It lives in one place because three call sites used
+    to disagree — configuration and composition accepted any ``DU`` prefix, so
+    ``DUMMY123`` passed both and was refused only at the broker adapter.
+    """
+
+    return PAPER_ACCOUNT_PATTERN.fullmatch(account_id.strip()) is not None
+
+
+def money(value: Decimal) -> Decimal:
+    """Put a computed amount onto the ``Money`` contract before it is validated.
+
+    ``Money`` permits eight decimal places and twenty digits, but Decimal
+    division and float conversion both work at the context precision of
+    twenty-eight.  Any amount a broker callback derives therefore has to be
+    normalized here first; otherwise the contract rejects an arithmetically
+    correct value for the shape it happens to arrive in.
+
+    An amount that cannot be represented at all raises ``InvalidOperation``.
+    That is an ``ArithmeticError``, which every broker parsing path already
+    treats as a fail-closed fact, so an unrepresentable amount is refused
+    rather than rounded into something plausible.
+    """
+
+    quantized = value.quantize(MONEY_EXPONENT, rounding=ROUND_HALF_UP)
+    if len(quantized.as_tuple().digits) > MONEY_MAX_DIGITS:
+        raise InvalidOperation("amount exceeds the twenty digits the money contract allows")
+    return quantized
 
 
 class FrozenModel(BaseModel):
@@ -401,9 +440,7 @@ class OrderIntent(FrozenModel):
     account_id: str = Field(min_length=1)
     environment: Literal["paper"] = "paper"
     submission_mode: Literal["paper", "shadow"] = "shadow"
-    research_promotion_sha256: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
+    research_promotion_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     symbol: str = Field(min_length=1)
     side: OrderSide
     quantity: int = Field(gt=0)
@@ -431,11 +468,7 @@ class OrderIntent(FrozenModel):
         is_entry = self.side in {OrderSide.BUY, OrderSide.SELL_SHORT}
         if self.submission_mode == "shadow" and self.research_promotion_sha256 is not None:
             raise ValueError("shadow intents cannot carry paper-promotion authorization")
-        if (
-            self.submission_mode == "paper"
-            and is_entry
-            and self.research_promotion_sha256 is None
-        ):
+        if self.submission_mode == "paper" and is_entry and self.research_promotion_sha256 is None:
             raise ValueError("paper entry intents require research-promotion authorization")
         return self
 

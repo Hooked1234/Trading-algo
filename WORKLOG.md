@@ -63,6 +63,88 @@ Gate C — IBKR-Paper-Execution-Härtung, Etappe 2 (Callbacks und Runtime):
 - Qualitätslauf nach Etappe 2: 474 Tests grün, 83,57 % Branch-Coverage,
   Ruff sauber; `tmp/` enthält keine alten Testverzeichnisse mehr.
 
+Gate-C-Review und Nacharbeit:
+
+- Das Projekt ist erstmals versioniert (`Trading-algo`, Commit `825bdb6`). Bis dahin
+  lagen Gates 0/A/B/C ausschließlich ungetrackt im Arbeitsverzeichnis — ein Review
+  musste deshalb den Vollstand lesen statt eine Änderung.
+- Review von Gate C fand zwei Blocker. Beide sind reproduziert, nicht vermutet:
+  1. Der gewichtete Durchschnittspreis in `_on_order_status` wurde ungerundet in
+     `ExecutionReport.average_fill_price` (acht Nachkommastellen) gesteckt. Zwei Fills
+     zu 1 Stück @ 10,00 und 2 Stück @ 10,01 lösten eine `ValidationError` im
+     `ibapi`-Reader-Thread aus. Der bestehende Mehrfach-Fill-Test benutzte 6 @ 99,80
+     und 4 @ 100,00 — ein Durchschnitt, der glatt aufgeht.
+  2. `TRADING_IBKR_CLIENT_ID` stand auf 71, `order_scope_authoritative()` verlangt
+     aber Client 0, und diese Prüfung liegt im `common`-Set jedes Readiness-Profils.
+     `run-paper` konnte mit ausgelieferter Konfiguration nie starten.
+- Der Fehler war kein Einzelfall: derselbe Umgang mit Broker-Rohwerten fand sich an
+  sechs weiteren Stellen (`_on_exec_details`, `_on_commission_report`,
+  `_on_remote_order`, `_on_portfolio`, `ibkr_bars`, `portfolio`). `money()` liegt jetzt
+  in `domain.py` neben der `Money`-Definition und ist der Projektstandard.
+- Kommission-Finalisierung geht nicht mehr über `model_copy(update=…)`, das die
+  Validierung umgeht und den vertragswidrigen Wert erst stromabwärts hat auffliegen
+  lassen, sondern über eine validierende Konstruktion.
+- Callback-Fehler werden nicht mehr nur gefangen, sondern rasten in einem Latch ein:
+  `ready_for_orders()` wird falsch und `reconcile_orders()` verweigert als erste
+  Prüfung. Das ist bewusst so gebaut — eine geworfene Callback-Exception beendet heute
+  den Reader-Thread, dessen `finally: self.disconnect()` das einzige Fail-closed-Signal
+  liefert. Bloßes Abfangen mit Logging hätte daraus fail-silent gemacht.
+- Verwerfungen außerhalb eines Reconciliation-Fensters waren stille No-ops. Sie werden
+  jetzt gemerkt und in die nächste Reconciliation eingefaltet.
+- `_on_portfolio` verwarf bei einem Vertragsfehler eine ganze Position hinter einem
+  pauschalen `except Exception`. Der Fehler wird jetzt gelatcht statt verschluckt.
+- Aufräumarbeiten: `PaperStartupGate` entfernt (durch `PaperRecoveryCoordinator`
+  abgelöst), `_ensure_execution_state()` und die internen `getattr`-Rückfallpfade
+  ersatzlos gestrichen, fünf `object.__new__`-Testdoubles auf den echten Konstruktor
+  `NativeIBAPIBackend.without_transport()` umgestellt, die DU-Regel auf eine einzige
+  strikte Funktion zusammengezogen (`DUMMY123` passierte vorher Config und Composition),
+  `_pending_commissions.pop()` hinter die Übernahme des Fills verschoben.
+- `# pragma: no cover` liegt nicht mehr auf der ganzen `NativeIBAPIBackend`, sondern nur
+  noch auf `connect`, `submit_order` und `portfolio_state`. Die gemeldete Coverage fiel
+  dadurch von 83,49 % auf 82,49 % — die Kennzahl beschrieb den sicherheitskritischsten
+  Teil von Gate C vorher überhaupt nicht.
+- Repo-weites `ruff format` (61 Dateien) und in `docs/testing.md` als feste
+  Qualitätsroutine hinterlegt.
+- Jede Korrektur ist durch eine Mutationsprobe abgesichert: neun zurückgenommene Fixes,
+  jeder färbt mindestens einen Test rot. Dabei fiel eine eigene Normalisierung als
+  redundant auf und wurde wieder entfernt, statt sie als toten Verteidigungscode
+  stehen zu lassen.
+- Eine unabhängige Abschlussprüfung fand danach noch drei Spuren der Parallelarbeit,
+  alle bestätigt und behoben: `orchestrator.py` prüfte als einzige Stelle weiter nur das
+  `DU`-Präfix; die Client-0-Pflicht war erst in `build_paper_runtime` erzwungen, also
+  erst nachdem die CLI bereits eine Gateway-Verbindung mit der falschen Client-ID
+  geöffnet hatte; und ein `getattr`-Rückfall war im Orchestrator stehengeblieben.
+- Dabei fiel ein Fail-open im neuen Verwerfungsmechanismus selbst auf: `reconcile_orders`
+  übernahm die gemerkten Verwerfungen in sein Ergebnis und leerte
+  `_deferred_inconsistencies`, *bevor* es auf die Endmarker des Brokers wartete. Ein
+  Timeout hätte die Tokens verloren. Schwerer noch: `_reconciliation_account` wurde nur
+  auf dem Erfolgspfad zurückgesetzt, ein einzelner Timeout hätte den Adapter dauerhaft
+  mit „reconciliation is already active" verklemmt. Beides ist jetzt in `try/finally`
+  gefasst und durch einen Test abgedeckt, der beide Mutationen rot färbt.
+- Eine zweite unabhängige Prüfung fand dann den schwersten Befund der ganzen Runde,
+  und zwar in der Korrektur vom selben Tag: das `try/finally` in `reconcile_orders`
+  deckte seinen eigenen Setup-Block nicht ab. `_reconciliation_account` wurde als erste
+  Anweisung gesetzt, zwei werfende Schritte folgten davor — ein Abbruch dort verklemmte
+  die Sitzung dauerhaft. Die Markierung steht jetzt am Ende des Setups, die Freigabe im
+  selben Lock wie der Ergebnis-Snapshot.
+- Ebenfalls gefunden: der komplette Markt-Recheck des Pre-Submit-Guards war von *keinem*
+  Test gedeckt. `_market_reasons` ließ sich ersatzlos entfernen und alle 490 Tests
+  blieben grün — der letzte Guard vor jeder Live-Submission trug kein einziges Testgewicht.
+  Zehn Ablehnungsgründe sind jetzt abgedeckt, alle zehn Mutationen färben rot.
+- Zwei meiner eigenen neuen Tests waren dabei zahnlos: Strategie und Risiko-Engine
+  liefern dieselben Codes `SYMBOL_HALTED`, `SPREAD_TOO_WIDE` und `MARKET_DATA_STALE` wie
+  der Preflight, sodass eine End-to-End-Assertion sie dem Guard nicht zuordnen konnte.
+  Sie laufen jetzt über den Exit-Pfad, der Strategie und Risiko überspringt, bzw. direkt
+  gegen `_market_reasons`.
+- Der Historien-Bar-Pfad und der 20-Ziffern-Guard in `money()` waren ungemessen; beides
+  ließ sich entfernen, ohne einen Test zu brechen. Jetzt nicht mehr.
+- Doku nachgezogen: Client-0-Pflicht in README und Runbook, strikte `DU<digits>`-Form in
+  `security.md`, die nicht existierende Einstellung `execution_enabled` aus
+  `NEXT_STEPS.md` entfernt, ADR-023 um das gemeinsame Pflicht-Set und die Cancel-Folge
+  ergänzt, ADR-026 (Callback-Latch) und ADR-027 (`money()`) neu.
+- Qualitätslauf am Ende: 501 Tests grün, 82,88 % Branch-Coverage, `ruff check` und
+  `ruff format` sauber. Jede Korrektur ist mutationsgeprüft.
+
 ## 2026-08-25
 
 - Initialized Python 3.12 project and strict immutable domain contracts.

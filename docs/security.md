@@ -3,7 +3,8 @@
 ## Paper-only invariant
 
 - Application settings accept only the literal environment `paper`.
-- Account identifiers must begin with IBKR's paper prefix `DU` and be allowlisted.
+- Account identifiers must match IBKR's paper-account shape `DU<digits>` and be
+  allowlisted. The shape alone is never sufficient; a `DU` prefix is not the rule.
 - The broker adapter revalidates both conditions immediately before every submission.
 - No live credentials, live endpoint or generic `enable_live` flag exists in version 1.
 

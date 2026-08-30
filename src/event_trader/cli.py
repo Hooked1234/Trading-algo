@@ -454,9 +454,7 @@ def run_backtest_command(
     """Evaluate every case of one artifact and record a hashed run."""
 
     case_artifact = read_artifact(ResearchCaseBuildArtifact, cases)
-    insight_artifact = (
-        read_artifact(InsightArtifact, insights) if insights is not None else None
-    )
+    insight_artifact = read_artifact(InsightArtifact, insights) if insights is not None else None
     try:
         run = build_backtest_run(
             case_artifact,
@@ -522,22 +520,12 @@ def create_promotion(
     code_manifest: Annotated[Path, typer.Option(exists=True, dir_okay=False)],
     experiment_id: Annotated[str, typer.Option()],
     output: Annotated[Path | None, typer.Option(dir_okay=False)] = None,
-    paired_result_json: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
-    model_result_json: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
-    paired_trades_json: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
-    paired_insights_json: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
+    paired_result_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
+    model_result_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
+    paired_trades_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
+    paired_insights_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
     labels_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
-    predictions_json: Annotated[
-        Path | None, typer.Option(exists=True, dir_okay=False)
-    ] = None,
+    predictions_json: Annotated[Path | None, typer.Option(exists=True, dir_okay=False)] = None,
     prompt_version: Annotated[str | None, typer.Option()] = None,
     schema_version: Annotated[str | None, typer.Option()] = None,
 ) -> None:
@@ -563,9 +551,7 @@ def create_promotion(
         raise typer.BadParameter("AI promotion requires both paired and model results")
     ai_influences_orders = paired_result_json is not None
     paired = (
-        PairedImprovementResult.model_validate_json(
-            paired_result_json.read_text(encoding="utf-8")
-        )
+        PairedImprovementResult.model_validate_json(paired_result_json.read_text(encoding="utf-8"))
         if paired_result_json is not None
         else None
     )
@@ -673,9 +659,7 @@ def create_promotion(
         schema_version=schema_version,
         created_at=datetime.now(UTC),
     )
-    target = write_promotion_artifact(
-        artifact, output or settings.promotion_artifact_path
-    )
+    target = write_promotion_artifact(artifact, output or settings.promotion_artifact_path)
     typer.echo(str(target))
 
 
@@ -763,27 +747,21 @@ def _validate_ai_pairing_lineage(
             or candidate_trade.category != insight.category
             or candidate_trade.metadata != baseline_trade.metadata
         ):
-            raise typer.BadParameter(
-                "AI candidate trade economics must match its quant-only event"
-            )
+            raise typer.BadParameter("AI candidate trade economics must match its quant-only event")
     return tuple(sorted(abstentions))
 
 
 async def _reconcile_sec_daily(target_date: date) -> object:
     settings = Settings()
     if "example.invalid" in settings.sec_user_agent:
-        raise typer.BadParameter(
-            "Configure TRADING_SEC_USER_AGENT before accessing SEC EDGAR."
-        )
+        raise typer.BadParameter("Configure TRADING_SEC_USER_AGENT before accessing SEC EDGAR.")
     config = SecProviderConfig(
         user_agent=settings.sec_user_agent,
         requests_per_second=settings.sec_max_requests_per_second,
     )
     ledger = SQLiteSecReconciliationLedger(settings.state_db_path)
     try:
-        async with SQLiteOperationalStore(
-            settings.state_db_path, settings.raw_data_dir
-        ) as store:
+        async with SQLiteOperationalStore(settings.state_db_path, settings.raw_data_dir) as store:
             async with SecDailyIndexProvider(
                 config,
                 limiter=AsyncRateLimiter(settings.sec_max_requests_per_second),
@@ -818,11 +796,11 @@ def _require_shadow_prerequisites(settings: Settings) -> None:
         )
 
 
-def _shadow_market_stack(settings: Settings):
-    """Build the IBKR-only runtime market stack for shadow mode.
+def _ibkr_market_stack(settings: Settings):
+    """Build the shared IBKR runtime market-data stack.
 
-    Requires a locally authenticated IB Gateway/TWS session; the adapter is
-    read-only here because the shadow broker cannot submit anything.
+    A locally authenticated IB Gateway/TWS session is required. Submission
+    authority is supplied separately by the shadow or paper composition root.
     """
 
     from .providers.ibkr_bars import IBAPIBarHook
@@ -846,7 +824,7 @@ async def _build_shadow_runtime(
     settings: Settings, *, variant: str
 ) -> tuple[ShadowRuntime, SQLiteOperationalStore, object]:
     _require_shadow_prerequisites(settings)
-    backend, market_provider, features = _shadow_market_stack(settings)
+    backend, market_provider, features = _ibkr_market_stack(settings)
     store = SQLiteOperationalStore(settings.state_db_path, settings.raw_data_dir)
     config = SecProviderConfig(
         user_agent=settings.sec_user_agent,
@@ -934,12 +912,15 @@ def _require_paper_prerequisites(settings: Settings) -> ResearchPromotionArtifac
     missing: list[str] = []
     if settings.placeholder_credentials:
         missing.append("TRADING_PAPER_ACCOUNT_ID (an allowlisted DU<digits> account)")
+    if settings.ibkr_client_id != 0:
+        # Checked before the market stack opens a socket: only client 0 sees
+        # manual and API orders in one authoritative scope, so any other value
+        # is a configuration fault, not something to discover after connecting.
+        missing.append("TRADING_IBKR_CLIENT_ID=0 (required for paper mode)")
     if not settings.promotion_artifact_path.is_file():
         missing.append(str(settings.promotion_artifact_path))
     if missing:
-        raise _PaperPrerequisiteError(
-            "Paper mode cannot start without: " + "; ".join(missing)
-        )
+        raise _PaperPrerequisiteError("Paper mode cannot start without: " + "; ".join(missing))
     try:
         return load_promotion_artifact(settings.promotion_artifact_path)
     except (OSError, ValueError) as exc:
@@ -962,16 +943,11 @@ async def _build_paper_runtime(
     SQLiteSecReconciliationLedger,
 ]:
     promotion = _require_paper_prerequisites(settings)
-    backend, market_provider, features = _shadow_market_stack(settings)
+    backend, market_provider, features = _ibkr_market_stack(settings)
     broker = IBKRBrokerAdapter(
         account_id=settings.paper_account_id,
         paper_account_allowlist=settings.allowed_paper_accounts,
         backend=backend,
-        connection=IBKRConnectionConfig(
-            host=settings.ibkr_host,
-            port=settings.ibkr_port,
-            client_id=settings.ibkr_client_id,
-        ),
     )
     store = SQLiteOperationalStore(settings.state_db_path, settings.raw_data_dir)
     sec_ledger = SQLiteSecReconciliationLedger(
@@ -1072,9 +1048,7 @@ def session_report(
     target_date = _parse_iso_date(session, "session")
 
     async def build() -> Path:
-        async with SQLiteOperationalStore(
-            settings.state_db_path, settings.raw_data_dir
-        ) as store:
+        async with SQLiteOperationalStore(settings.state_db_path, settings.raw_data_dir) as store:
             metrics = await build_daily_metrics(
                 store,
                 session_date=target_date,
@@ -1161,9 +1135,7 @@ def data_quality(
         market_symbols_file.read_text(encoding="utf-8").splitlines() if market_symbols_file else []
     )
     coverage = (
-        TypeAdapter(list[CoverageRecord]).validate_json(
-            coverage_json.read_text(encoding="utf-8")
-        )
+        TypeAdapter(list[CoverageRecord]).validate_json(coverage_json.read_text(encoding="utf-8"))
         if coverage_json is not None
         else []
     )

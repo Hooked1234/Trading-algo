@@ -19,7 +19,14 @@ from .broker import Broker
 from .calendar import NEW_YORK, NyseSessionCalendar
 from .candidates import CandidateGate
 from .config import Settings
-from .domain import EventSnapshot, MarketSnapshot, OrderSide, PortfolioState
+from .domain import (
+    EventSnapshot,
+    MarketSnapshot,
+    OrderSide,
+    PortfolioState,
+    is_paper_account_id,
+    money,
+)
 from .execution import PaperExecutionService
 from .monitor import ExitMonitor
 from .orchestrator import EventTradingOrchestrator
@@ -102,7 +109,7 @@ def risk_engine_from_settings(settings: Settings) -> RiskEngine:
         max_abs_net_exposure=Decimal(str(settings.max_abs_net_exposure)),
         max_daily_loss=Decimal(str(settings.max_daily_loss)),
         max_drawdown=Decimal(str(settings.max_drawdown)),
-        strategy_nav=Decimal(str(settings.strategy_nav)),
+        strategy_nav=money(Decimal(str(settings.strategy_nav))),
     )
 
 
@@ -151,7 +158,7 @@ def build_shadow_runtime(
         provider = insight_provider or KeywordInsightProvider()
         strategy = ContinuationStrategy(session_calendar)
     broker = NonSubmittingShadowBroker(
-        strategy_nav=Decimal(str(settings.strategy_nav)),
+        strategy_nav=money(Decimal(str(settings.strategy_nav))),
         clock=tick,
     )
     execution = PaperExecutionService(
@@ -242,8 +249,7 @@ def build_shadow_runtime(
             lease=SQLiteSingletonLease(store) if use_lease else None,
             clock=tick,
             calendar=session_calendar,
-            sec_poll_interval=sec_poll_interval
-            or timedelta(seconds=settings.sec_poll_seconds),
+            sec_poll_interval=sec_poll_interval or timedelta(seconds=settings.sec_poll_seconds),
             session_interval=session_interval,
             exit_interval=exit_interval,
         ),
@@ -281,10 +287,17 @@ def build_paper_runtime(
 
     if settings.placeholder_credentials:
         raise ValueError("paper runtime requires a configured IBKR DU account")
-    if not settings.paper_account_id.upper().startswith("DU"):
+    if not is_paper_account_id(settings.paper_account_id):
         raise ValueError("paper runtime requires an IBKR DU account")
     if broker.account_id != settings.paper_account_id:  # type: ignore[attr-defined]
         raise ValueError("paper runtime broker account differs from settings")
+    if settings.ibkr_client_id != 0:
+        # Readiness would refuse this session later anyway, but only after a
+        # connection and with a message about order scope rather than config.
+        raise ValueError(
+            "paper runtime requires IBKR client id 0; no other client sees "
+            "manual and API orders in one authoritative scope"
+        )
     tick = clock or (lambda: datetime.now(UTC))
     session_calendar = calendar or NyseSessionCalendar()
     if variant == "quant-only":
@@ -410,8 +423,7 @@ def build_paper_runtime(
             lease=SQLiteSingletonLease(store) if use_lease else None,
             clock=tick,
             calendar=session_calendar,
-            sec_poll_interval=sec_poll_interval
-            or timedelta(seconds=settings.sec_poll_seconds),
+            sec_poll_interval=sec_poll_interval or timedelta(seconds=settings.sec_poll_seconds),
             session_interval=session_interval,
             exit_interval=exit_interval,
         ),
@@ -422,9 +434,7 @@ def build_paper_runtime(
     )
 
 
-async def _shadow_portfolio(
-    broker: NonSubmittingShadowBroker, clock: Clock
-) -> PortfolioState:
+async def _shadow_portfolio(broker: NonSubmittingShadowBroker, clock: Clock) -> PortfolioState:
     del clock
     return broker.portfolio_state()
 

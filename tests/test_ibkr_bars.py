@@ -50,7 +50,7 @@ def _hook(client: StubClient, **kwargs) -> IBAPIBarHook:
 MINUTE_START = datetime(2026, 8, 25, 14, 30, tzinfo=UTC)
 
 
-def _historical(minute_start: datetime, close: float = 100.5) -> StubBarData:
+def _historical(minute_start: datetime, close: float = 100.5, wap: float = 100.2) -> StubBarData:
     return StubBarData(
         date=str(int(minute_start.timestamp())),
         open=100.0,
@@ -58,7 +58,7 @@ def _historical(minute_start: datetime, close: float = 100.5) -> StubBarData:
         low=99.5,
         close=close,
         volume=1_000,
-        wap=100.2,
+        wap=wap,
     )
 
 
@@ -71,12 +71,34 @@ def test_history_is_only_visible_once_it_is_complete() -> None:
 
     assert hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)) == ()
     hook.on_historical_data_end(request_id, "", "")
-    bars = hook.minute_bars(
-        "AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    )
+    bars = hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1))
 
     assert len(bars) == 1
     assert hook.history_complete("AAPL") is True
+
+
+def test_a_historical_bar_price_stays_within_money_precision() -> None:
+    """The historical path converts broker floats and must normalize them too.
+
+    Only the live path was covered before, so removing the normalization from
+    the historical conversion left the whole suite green - against the promise
+    docs/testing.md makes about this exact class of change.
+    """
+
+    client = StubClient()
+    hook = _hook(client)
+    request_id = int(hook.request_history("AAPL"))
+    hook.on_historical_data(
+        request_id, _historical(MINUTE_START, close=100.123456789, wap=100.987654321)
+    )
+    hook.on_historical_data_end(request_id, "", "")
+
+    bar = hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1))[0]
+
+    assert bar.close == Decimal("100.12345679")
+    assert bar.vwap == Decimal("100.98765432")
+    assert bar.close.as_tuple().exponent >= -8
+    assert bar.vwap.as_tuple().exponent >= -8
 
 
 def test_a_historical_bar_is_timestamped_at_its_completion() -> None:
@@ -127,9 +149,7 @@ def test_a_partial_live_minute_is_never_published() -> None:
             7,
         )
 
-    assert hook.minute_bars(
-        "AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    ) == ()
+    assert hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)) == ()
 
 
 def test_twelve_five_second_bars_become_one_completed_minute() -> None:
@@ -153,9 +173,7 @@ def test_twelve_five_second_bars_become_one_completed_minute() -> None:
             7,
         )
 
-    bars = hook.minute_bars(
-        "AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    )
+    bars = hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1))
 
     assert len(bars) == 1
     minute = bars[0]
@@ -166,6 +184,42 @@ def test_twelve_five_second_bars_become_one_completed_minute() -> None:
     assert minute.low == Decimal("99.5")
     assert minute.volume == 600
     assert minute.feed == "ibkr:live"
+
+
+def test_a_completed_minute_vwap_stays_within_money_precision() -> None:
+    """The volume-weighted price is a division and can leave the contract.
+
+    Eleven bars at 100.00 and one at 100.01, one share each, average to
+    100.000833..., which Decimal carries to the context precision while
+    ``Bar.vwap`` allows eight decimal places.
+    """
+
+    client = StubClient()
+    hook = _hook(client)
+    history_id = int(hook.request_history("AAPL"))
+    hook.on_market_data_type(history_id, 1)
+    hook.on_historical_data_end(history_id, "", "")
+    realtime_id = int(hook.subscribe_realtime("AAPL"))
+
+    for index in range(12):
+        wap = 100.01 if index == 0 else 100.0
+        hook.on_realtime_bar(
+            realtime_id,
+            int((MINUTE_START + timedelta(seconds=5 * index)).timestamp()),
+            100.0,
+            100.5,
+            99.5,
+            100.2,
+            1,
+            wap,
+            7,
+        )
+
+    bars = hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1))
+
+    assert len(bars) == 1
+    assert bars[0].vwap == Decimal("100.00083333")
+    assert bars[0].vwap.as_tuple().exponent >= -8
 
 
 def test_the_feed_status_fails_closed_until_ibkr_confirms_it() -> None:
@@ -191,9 +245,7 @@ def test_a_request_error_invalidates_the_history() -> None:
     hook.on_error(request_id, 162, "historical data request pacing violation")
 
     assert hook.history_complete("AAPL") is False
-    assert hook.minute_bars(
-        "AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    ) == ()
+    assert hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)) == ()
 
 
 def test_a_warning_does_not_invalidate_the_history() -> None:
@@ -268,14 +320,10 @@ def test_retained_history_is_bounded() -> None:
     hook = _hook(client, retain_minutes=3)
     request_id = int(hook.request_history("AAPL"))
     for index in range(6):
-        hook.on_historical_data(
-            request_id, _historical(MINUTE_START + timedelta(minutes=index))
-        )
+        hook.on_historical_data(request_id, _historical(MINUTE_START + timedelta(minutes=index)))
     hook.on_historical_data_end(request_id, "", "")
 
-    bars = hook.minute_bars(
-        "AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    )
+    bars = hook.minute_bars("AAPL", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1))
 
     assert len(bars) == 3
     assert bars[0].timestamp == MINUTE_START + timedelta(minutes=4)
@@ -284,8 +332,6 @@ def test_retained_history_is_bounded() -> None:
 def test_an_unknown_symbol_has_no_bars_and_no_feed() -> None:
     hook = _hook(StubClient())
 
-    assert hook.minute_bars(
-        "MSFT", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)
-    ) == ()
+    assert hook.minute_bars("MSFT", start=MINUTE_START, end=MINUTE_START + timedelta(hours=1)) == ()
     assert hook.feed_status("MSFT") is FeedStatus.UNKNOWN
     assert hook.history_complete("MSFT") is False

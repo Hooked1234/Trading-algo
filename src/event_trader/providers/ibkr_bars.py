@@ -22,7 +22,9 @@ from decimal import Decimal, InvalidOperation
 from threading import RLock
 from typing import Any
 
-from event_trader.domain import Bar, DataSource, utc_now
+from pydantic import ValidationError
+
+from event_trader.domain import Bar, DataSource, money, utc_now
 
 from .ibkr_market import (
     FeedStatus,
@@ -91,7 +93,12 @@ class _PartialMinute:
         self.count += 1
 
     def complete(self, symbol: str, feed: str) -> Bar:
-        vwap = self.notional / self.volume if self.volume else None
+        # A volume-weighted price is a division and therefore the one value in
+        # this accumulator that can leave the money contract's precision.
+        try:
+            vwap = money(self.notional / self.volume) if self.volume else None
+        except ArithmeticError as exc:
+            raise IBKRMarketDataPayloadError("bar vwap is not representable") from exc
         return Bar(
             symbol=symbol,
             timestamp=self.minute_start + MINUTE,
@@ -364,18 +371,23 @@ class IBAPIBarHook:
             raise IBKRMarketDataPayloadError("malformed IBKR historical bar") from exc
         if shares < 0:
             raise IBKRMarketDataPayloadError("bar volume cannot be negative")
-        return Bar(
-            symbol=state.symbol,
-            timestamp=started + MINUTE,
-            open=values["open"],
-            high=values["high"],
-            low=values["low"],
-            close=values["close"],
-            volume=shares,
-            vwap=values["wap"] if shares else None,
-            source=DataSource.IBKR,
-            feed=state.feed,
-        )
+        # The contract check belongs to the same guarded step as the parsing: a
+        # bar the model rejects is a malformed payload, not an escaping error.
+        try:
+            return Bar(
+                symbol=state.symbol,
+                timestamp=started + MINUTE,
+                open=values["open"],
+                high=values["high"],
+                low=values["low"],
+                close=values["close"],
+                volume=shares,
+                vwap=values["wap"] if shares else None,
+                source=DataSource.IBKR,
+                feed=state.feed,
+            )
+        except ValidationError as exc:
+            raise IBKRMarketDataPayloadError("malformed IBKR historical bar") from exc
 
     def _trim(self, state: _SymbolBars) -> None:
         excess = len(state.minutes) - self._retain_minutes
@@ -395,13 +407,16 @@ def _symbol(symbol: str) -> str:
 def _decimals(
     open_: float, high: float, low: float, close: float, wap: float
 ) -> dict[str, Decimal]:
-    values = {
-        "open": Decimal(str(open_)),
-        "high": Decimal(str(high)),
-        "low": Decimal(str(low)),
-        "close": Decimal(str(close)),
-        "wap": Decimal(str(wap)),
-    }
+    try:
+        values = {
+            "open": money(Decimal(str(open_))),
+            "high": money(Decimal(str(high))),
+            "low": money(Decimal(str(low))),
+            "close": money(Decimal(str(close))),
+            "wap": money(Decimal(str(wap))),
+        }
+    except ArithmeticError as exc:
+        raise IBKRMarketDataPayloadError("bar prices are not representable") from exc
     if any(value <= 0 for value in values.values()):
         raise IBKRMarketDataPayloadError("bar prices must be positive")
     if values["high"] < values["low"]:

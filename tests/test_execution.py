@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from threading import RLock
 
 import pytest
 from pydantic import ValidationError
@@ -74,9 +73,7 @@ def report(
         idempotency_key=order.idempotency_key,
         status=status,
         filled_quantity=filled_quantity,
-        average_fill_price=(
-            Decimal("99.90") if filled_quantity else Decimal("0")
-        ),
+        average_fill_price=(Decimal("99.90") if filled_quantity else Decimal("0")),
         broker_order_id=f"broker:{order.order_id}",
         occurred_at=occurred_at,
     )
@@ -124,9 +121,7 @@ class PartialFillBroker:
             cash=Decimal("100000"),
         )
 
-    def readiness(
-        self, _profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, _profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         return BrokerReadiness(
             account_id="DU123456",
             checked_at=NOW,
@@ -221,9 +216,7 @@ async def test_partial_fill_reprice_uses_only_remaining_quantity_and_guard() -> 
     assert service.has_pre_submit_guard
     assert [intent.quantity for intent in broker.submitted] == [10, 6]
     assert [intent.quantity for intent in ledger.intents.values()] == [10, 6]
-    cancelled = next(
-        item for item in reports if item.status is ExecutionStatus.CANCELLED
-    )
+    cancelled = next(item for item in reports if item.status is ExecutionStatus.CANCELLED)
     assert cancelled.filled_quantity == 4
     assert cancelled.average_fill_price == Decimal("99.90")
     for submitted in broker.submitted:
@@ -351,7 +344,7 @@ async def test_a_replacement_can_never_create_a_second_generation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_submit_guard_rejection_persists_intent_but_never_submits() -> None:
+async def test_pre_submit_guard_rejection_neither_persists_nor_submits() -> None:
     events: list[str] = []
     broker = PartialFillBroker(events)
     ledger = MemoryExecutionLedger(events)
@@ -379,9 +372,10 @@ async def test_pre_submit_guard_rejection_persists_intent_but_never_submits() ->
         promotion_artifact_sha256="a" * 64,
     )
 
-    with pytest.raises(PreSubmitGuardRejected, match="entry-1"):
+    with pytest.raises(PreSubmitGuardRejected) as rejected:
         await guarded.submit_with_one_reprice(order_intent())
 
+    assert rejected.value.reasons == ("PRE_SUBMIT_GUARD_REJECTED",)
     assert guarded.has_pre_submit_guard
     assert not unguarded.has_pre_submit_guard
     assert ledger.intents == {}
@@ -410,9 +404,10 @@ async def test_pre_submit_guard_requires_explicit_true() -> None:
         pre_submit_guard=missing_decision,
     )
 
-    with pytest.raises(PreSubmitGuardRejected):
+    with pytest.raises(PreSubmitGuardRejected) as rejected:
         await service.submit_with_one_reprice(order_intent())
 
+    assert rejected.value.reasons == ("PRE_SUBMIT_GUARD_REJECTED",)
     assert ledger.intents == {}
     assert broker.submitted == []
 
@@ -713,17 +708,12 @@ async def test_cancel_confirmation_is_bounded_and_fails_closed() -> None:
         await service.submit_with_one_reprice(order_intent())
 
     assert broker.reconcile_count == 3  # one wait refresh plus two cancel polls
-    assert [event for event in events if event.startswith("cancel:")] == [
-        "cancel:entry-1"
-    ]
+    assert [event for event in events if event.startswith("cancel:")] == ["cancel:entry-1"]
 
 
 def test_native_ibkr_cancelled_partial_fill_remains_terminal_and_cumulative() -> None:
-    backend = object.__new__(NativeIBAPIBackend)
-    backend._lock = RLock()
-    backend._clock = lambda: NOW + timedelta(seconds=1)
+    backend = NativeIBAPIBackend.without_transport(clock=lambda: NOW + timedelta(seconds=1))
     backend._intents = {9100: order_intent()}
-    backend._reports = {}
 
     backend._on_order_status(9100, "Cancelled", Decimal("4"), 99.90)
 

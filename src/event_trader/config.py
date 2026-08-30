@@ -9,6 +9,11 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .domain import is_paper_account_id
+
+PLACEHOLDER_ACCOUNT_ID = "DU_NOT_CONFIGURED"
+"""Inert default: deliberately not a valid IBKR paper account id."""
+
 
 class Settings(BaseSettings):
     """Environment-backed configuration.
@@ -25,8 +30,8 @@ class Settings(BaseSettings):
     )
 
     environment: Literal["paper"] = "paper"
-    paper_account_id: str = "DU_NOT_CONFIGURED"
-    allowed_paper_accounts: tuple[str, ...] = ("DU_NOT_CONFIGURED",)
+    paper_account_id: str = PLACEHOLDER_ACCOUNT_ID
+    allowed_paper_accounts: tuple[str, ...] = (PLACEHOLDER_ACCOUNT_ID,)
 
     sec_user_agent: str = "event-trader local-contact@example.invalid"
     sec_poll_seconds: float = Field(default=10.0, ge=5.0)
@@ -55,7 +60,9 @@ class Settings(BaseSettings):
 
     ibkr_host: str = "127.0.0.1"
     ibkr_port: int = Field(default=7497, ge=1, le=65_535)
-    ibkr_client_id: int = Field(default=71, ge=0)
+    # Client 0 is the only id whose session observes manual and API orders in
+    # one authoritative scope; paper mode refuses anything else outright.
+    ibkr_client_id: int = Field(default=0, ge=0)
 
     strategy_nav: float = Field(default=100_000, gt=0)
     risk_per_trade: float = Field(default=0.005, gt=0, le=0.005)
@@ -71,7 +78,11 @@ class Settings(BaseSettings):
     def accounts_must_be_paper(cls, accounts: tuple[str, ...]) -> tuple[str, ...]:
         if not accounts:
             raise ValueError("at least one paper account must be allowlisted")
-        invalid = [account for account in accounts if not account.upper().startswith("DU")]
+        invalid = [
+            account
+            for account in accounts
+            if account.upper() != PLACEHOLDER_ACCOUNT_ID and not is_paper_account_id(account)
+        ]
         if invalid:
             raise ValueError("IBKR paper account ids must start with DU")
         return tuple(account.upper() for account in accounts)
@@ -118,7 +129,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def selected_account_is_allowlisted(self) -> Settings:
         account = self.paper_account_id.upper()
-        if not account.startswith("DU"):
+        if account != PLACEHOLDER_ACCOUNT_ID and not is_paper_account_id(account):
             raise ValueError("selected account is not an IBKR paper account")
         if account not in self.allowed_paper_accounts:
             raise ValueError("selected paper account is not allowlisted")
@@ -126,4 +137,4 @@ class Settings(BaseSettings):
 
     @property
     def placeholder_credentials(self) -> bool:
-        return self.paper_account_id == "DU_NOT_CONFIGURED"
+        return self.paper_account_id == PLACEHOLDER_ACCOUNT_ID

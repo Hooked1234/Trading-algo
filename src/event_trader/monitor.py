@@ -34,13 +34,9 @@ from .execution import (
 class ExitMonitorLedger(Protocol):
     """Durable lookup used to suppress duplicate exit workflows after restart."""
 
-    async def get_order_intent_by_key(
-        self, idempotency_key: str
-    ) -> OrderIntent | None: ...
+    async def get_order_intent_by_key(self, idempotency_key: str) -> OrderIntent | None: ...
 
-    async def get_execution_report(
-        self, order_id: str
-    ) -> ExecutionReport | None: ...
+    async def get_execution_report(self, order_id: str) -> ExecutionReport | None: ...
 
 
 class ExitExecutor(Protocol):
@@ -49,9 +45,7 @@ class ExitExecutor(Protocol):
     @property
     def has_pre_submit_guard(self) -> bool: ...
 
-    async def submit_with_one_reprice(
-        self, intent: OrderIntent
-    ) -> tuple[ExecutionReport, ...]: ...
+    async def submit_with_one_reprice(self, intent: OrderIntent) -> tuple[ExecutionReport, ...]: ...
 
     async def reconcile_order(self, order_id: str) -> ExecutionReport: ...
 
@@ -98,9 +92,7 @@ class ExitMonitorCycle:
     @property
     def blocked(self) -> tuple[ExitMonitorOutcome, ...]:
         return tuple(
-            outcome
-            for outcome in self.outcomes
-            if outcome.status is ExitMonitorStatus.BLOCKED
+            outcome for outcome in self.outcomes if outcome.status is ExitMonitorStatus.BLOCKED
         )
 
 
@@ -169,8 +161,8 @@ class ExitMonitor:
                     portfolio_failures=portfolio_failures,
                     now=now,
                 )
-            except PreSubmitGuardRejected:
-                outcome = self._blocked(symbol, ("PRE_SUBMIT_GUARD_REJECTED",))
+            except PreSubmitGuardRejected as exc:
+                outcome = self._blocked(symbol, exc.reasons)
             except OrderIntentClaimLost:
                 outcome = self._blocked(symbol, ("EXIT_SUBMISSION_CLAIM_LOST",))
             except (BrokerError, ExecutionError):
@@ -285,9 +277,7 @@ class ExitMonitor:
             execution_reports=reports,
         )
 
-    def _portfolio_failures(
-        self, portfolio: PortfolioState, now: datetime
-    ) -> tuple[str, ...]:
+    def _portfolio_failures(self, portfolio: PortfolioState, now: datetime) -> tuple[str, ...]:
         failures: list[str] = []
         if not portfolio.broker_connected:
             failures.append("PORTFOLIO_BROKER_DISCONNECTED")
@@ -315,9 +305,7 @@ class ExitMonitor:
             failures.append("SIGNAL_STATE_FROM_FUTURE")
         return tuple(failures)
 
-    def _market_failures(
-        self, market: MarketSnapshot, now: datetime
-    ) -> tuple[str, ...]:
+    def _market_failures(self, market: MarketSnapshot, now: datetime) -> tuple[str, ...]:
         failures: list[str] = []
         if not market.data_fresh:
             failures.append("MARKET_NOT_FRESH")
@@ -353,10 +341,7 @@ class ExitMonitor:
         return tuple(failures)
 
     def _exit_key(self, signal: Signal, position: Position) -> str:
-        return (
-            f"{signal.signal_id}:exit:{self.account_id}:"
-            f"{self._symbol(position.symbol)}"
-        )
+        return f"{signal.signal_id}:exit:{self.account_id}:{self._symbol(position.symbol)}"
 
     def _existing_intent_failures(
         self,
@@ -365,9 +350,7 @@ class ExitMonitor:
         position: Position,
     ) -> tuple[str, ...]:
         expected_side = (
-            OrderSide.SELL
-            if position.direction is Direction.LONG
-            else OrderSide.BUY_TO_COVER
+            OrderSide.SELL if position.direction is Direction.LONG else OrderSide.BUY_TO_COVER
         )
         failures: list[str] = []
         if intent.account_id != self.account_id:
@@ -393,9 +376,7 @@ class ExitMonitor:
         attempt_number: int,
         now: datetime,
     ) -> ExitMonitorOutcome:
-        identity_failures = self._existing_intent_failures(
-            existing, signal, position
-        )
+        identity_failures = self._existing_intent_failures(existing, signal, position)
         if identity_failures:
             return self._blocked(symbol, identity_failures, intent=existing)
 
@@ -422,14 +403,14 @@ class ExitMonitor:
                 existing,
                 latest,
             )
-            active = await self.ledger.get_order_intent_by_key(
-                f"{existing.idempotency_key}:r1"
-            )
+            active = await self.ledger.get_order_intent_by_key(f"{existing.idempotency_key}:r1")
             return ExitMonitorOutcome(
                 symbol=symbol,
                 status=(
                     ExitMonitorStatus.EXIT_SUBMITTED
-                    if reports and reports[-1].status in {
+                    if reports
+                    and reports[-1].status
+                    in {
                         ExecutionStatus.FILLED,
                         ExecutionStatus.CANCELLED,
                         ExecutionStatus.REJECTED,
@@ -482,9 +463,7 @@ class ExitMonitor:
                 execution_reports=reports,
             )
 
-        replacement_failures = self._existing_intent_failures(
-            replacement, signal, position
-        )
+        replacement_failures = self._existing_intent_failures(replacement, signal, position)
         if replacement_failures:
             return self._blocked(symbol, replacement_failures, intent=replacement)
         replacement_report = await self._latest_report(replacement)
@@ -500,9 +479,7 @@ class ExitMonitor:
             ExecutionStatus.PARTIALLY_FILLED,
         }:
             expected_remaining = (
-                existing.quantity
-                - latest.filled_quantity
-                - replacement_report.filled_quantity
+                existing.quantity - latest.filled_quantity - replacement_report.filled_quantity
             )
             if expected_remaining != position.quantity:
                 return self._blocked(
@@ -518,7 +495,9 @@ class ExitMonitor:
                 symbol=symbol,
                 status=(
                     ExitMonitorStatus.EXIT_SUBMITTED
-                    if reports and reports[-1].status in {
+                    if reports
+                    and reports[-1].status
+                    in {
                         ExecutionStatus.FILLED,
                         ExecutionStatus.CANCELLED,
                         ExecutionStatus.REJECTED,
@@ -580,9 +559,7 @@ class ExitMonitor:
             execution_reports=reports,
         )
 
-    async def _latest_attempt(
-        self, durable_key: str
-    ) -> tuple[OrderIntent | None, int]:
+    async def _latest_attempt(self, durable_key: str) -> tuple[OrderIntent | None, int]:
         latest: OrderIntent | None = None
         attempt_number = 1
         while attempt_number <= 1_000:
@@ -610,11 +587,7 @@ class ExitMonitor:
         now: datetime,
         idempotency_key: str,
     ) -> OrderIntent:
-        limit_price = (
-            market.quote.bid
-            if previous.side is OrderSide.SELL
-            else market.quote.ask
-        )
+        limit_price = market.quote.bid if previous.side is OrderSide.SELL else market.quote.ask
         data = previous.model_dump()
         data.update(
             {
@@ -629,9 +602,7 @@ class ExitMonitor:
         )
         return OrderIntent.model_validate(data)
 
-    async def _latest_report(
-        self, intent: OrderIntent
-    ) -> ExecutionReport | None:
+    async def _latest_report(self, intent: OrderIntent) -> ExecutionReport | None:
         latest = await self.ledger.get_execution_report(intent.order_id)
         if latest is not None and latest.status in {
             ExecutionStatus.FILLED,

@@ -1,12 +1,10 @@
 from dataclasses import replace
-from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 
 from event_trader.broker import (
     BrokerReadiness,
-    InMemoryPaperBroker,
     ReadinessCheck,
     ReadinessProfile,
     ReconciliationResult,
@@ -20,69 +18,7 @@ from event_trader.domain import (
     PortfolioState,
 )
 from event_trader.providers.ibkr import IBKRRecoveryIncomplete
-from event_trader.startup import PaperRecoveryCoordinator, PaperStartupGate
-
-
-async def test_startup_gate_reconciles_before_runtime(decision_time) -> None:
-    broker = InMemoryPaperBroker(
-        account_id="DU123456",
-        paper_account_allowlist=("DU123456",),
-        clock=lambda: decision_time,
-    )
-
-    class Store:
-        def __init__(self):
-            self.reports = []
-
-        async def save_execution_report(self, report):
-            self.reports.append(report)
-            return True
-
-    store = Store()
-    restored = []
-
-    async def restore():
-        restored.append(True)
-
-    gate = PaperStartupGate(
-        broker=broker,
-        store=store,
-        clock=lambda: decision_time,
-        restore=restore,
-    )
-
-    await gate()
-
-    assert restored == [True]
-    assert broker.readiness().ready
-
-
-async def test_startup_gate_resamples_time_after_slow_reconciliation(decision_time) -> None:
-    broker_ticks = iter(
-        (
-            decision_time,
-            decision_time + timedelta(seconds=2),
-            decision_time + timedelta(seconds=2),
-        )
-    )
-    broker = InMemoryPaperBroker(
-        account_id="DU123456",
-        paper_account_allowlist=("DU123456",),
-        clock=lambda: next(broker_ticks),
-    )
-
-    class Store:
-        async def save_execution_report(self, _report):
-            return True
-
-    gate_ticks = iter((decision_time, decision_time + timedelta(seconds=3)))
-    gate = PaperStartupGate(
-        broker=broker,
-        store=Store(),
-        clock=lambda: next(gate_ticks),
-    )
-
-    await gate()
+from event_trader.startup import PaperRecoveryCoordinator
 
 
 def _paper_intent(decision_time) -> OrderIntent:
@@ -122,9 +58,7 @@ class _RecoveryBroker:
         self.events.append(f"restore:{max_orders}")
         return self.result.executions
 
-    def readiness(
-        self, profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         self.events.append(f"readiness:{profile.value}")
         return BrokerReadiness(
             account_id=self.account_id,

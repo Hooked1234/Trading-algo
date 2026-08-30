@@ -29,8 +29,9 @@ from .domain import (
     PortfolioState,
     RiskDecision,
     Signal,
+    is_paper_account_id,
 )
-from .execution import PaperExecutionService
+from .execution import PaperExecutionService, PreSubmitGuardRejected
 from .promotion import ResearchPromotionArtifact
 from .providers.insight import InsightProvider
 from .risk import RiskEngine
@@ -129,22 +130,19 @@ class EventTradingOrchestrator:
             )
             if runtime_fingerprints != expected_fingerprints:
                 raise ValueError("runtime manifests do not match the promotion artifact")
-        if execution_enabled and not account_id.upper().startswith("DU"):
+        if execution_enabled and not is_paper_account_id(account_id):
             raise ValueError("paper execution requires an IBKR DU account")
         if execution_enabled and (snapshot_refresher is None or portfolio_refresher is None):
             raise ValueError("paper execution requires fresh snapshot and portfolio providers")
         if execution_enabled and decision_clock is None:
             raise ValueError("paper execution requires a real decision clock")
-        if execution_enabled and not getattr(execution_service, "has_pre_submit_guard", False):
+        if execution_enabled and not execution_service.has_pre_submit_guard:
             raise ValueError("paper execution requires a pre-submit guard")
         if execution_enabled and (
             promotion_artifact is None
-            or execution_service.promotion_artifact_sha256
-            != promotion_artifact.artifact_sha256
+            or execution_service.promotion_artifact_sha256 != promotion_artifact.artifact_sha256
         ):
-            raise ValueError(
-                "paper execution service must be bound to the promotion artifact"
-            )
+            raise ValueError("paper execution service must be bound to the promotion artifact")
         if execution_service.ledger is not ledger:
             raise ValueError("pipeline and execution service must share one durable ledger")
         self.insight_provider = insight_provider
@@ -268,9 +266,7 @@ class EventTradingOrchestrator:
                 reused_analysis=reused,
             )
 
-        rejection_reasons = self.strategy.rejection_reasons(
-            active_snapshot, insight, decision_time
-        )
+        rejection_reasons = self.strategy.rejection_reasons(active_snapshot, insight, decision_time)
         signal = self.strategy.evaluate(active_snapshot, insight, decision_time)
         if signal is None:
             return self._outcome(
@@ -349,7 +345,21 @@ class EventTradingOrchestrator:
                 order_intent=intent,
             )
 
-        reports = await self.execution_service.submit_with_one_reprice(intent)
+        try:
+            reports = await self.execution_service.submit_with_one_reprice(intent)
+        except PreSubmitGuardRejected as exc:
+            return self._outcome(
+                snapshot,
+                stage="preflight_rejected",
+                reasons=exc.reasons,
+                candidate=confirmed,
+                insight=insight,
+                analysis_key=analysis_key,
+                reused_analysis=reused,
+                signal=signal,
+                risk_decision=decision,
+                order_intent=intent,
+            )
         return self._outcome(
             snapshot,
             stage="paper_submitted",
@@ -385,11 +395,7 @@ class EventTradingOrchestrator:
         else:
             latency = timedelta(milliseconds=insight.latency_ms) if insight else timedelta(0)
             decision_time = now + latency
-        if (
-            decision_time.tzinfo is None
-            or decision_time.utcoffset() is None
-            or decision_time < now
-        ):
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None or decision_time < now:
             return None
         return decision_time
 
@@ -496,9 +502,7 @@ class EventTradingOrchestrator:
             strategy_version=signal.strategy_version,
         )
 
-    def _entry_order_key_for(
-        self, *, event_id: str, symbol: str, strategy_version: str
-    ) -> str:
+    def _entry_order_key_for(self, *, event_id: str, symbol: str, strategy_version: str) -> str:
         return f"{event_id}:{symbol}:{strategy_version}:{self.account_id}:entry"
 
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from threading import Event, RLock
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +51,7 @@ def intent(
     order_id: str = "order-1",
     key: str = "event-1:AAPL:buy:v1",
     symbol: str = "AAPL",
+    quantity: int = 10,
 ) -> OrderIntent:
     return OrderIntent(
         order_id=order_id,
@@ -62,7 +62,7 @@ def intent(
         research_promotion_sha256="a" * 64,
         symbol=symbol,
         side=OrderSide.BUY,
-        quantity=10,
+        quantity=quantity,
         limit_price=Decimal("100.00"),
         created_at=NOW,
     )
@@ -370,9 +370,7 @@ class FakeRecoveryStore:
     async def get_execution_report(self, order_id: str) -> ExecutionReport | None:
         return self.reports.get(order_id)
 
-    async def list_order_intents(
-        self, *, limit: int = 1_000
-    ) -> tuple[OrderIntent, ...]:
+    async def list_order_intents(self, *, limit: int = 1_000) -> tuple[OrderIntent, ...]:
         return self.all_intents[:limit]
 
 
@@ -635,9 +633,10 @@ def test_ibkr_reconcile_blocks_non_authoritative_order_scope() -> None:
     with pytest.raises(IBKRRecoveryIncomplete, match="authoritatively"):
         adapter.reconcile()
 
-    assert {
-        check.name for check in adapter.readiness().failures
-    } >= {"account_order_scope_authoritative", "reconciled"}
+    assert {check.name for check in adapter.readiness().failures} >= {
+        "account_order_scope_authoritative",
+        "reconciled",
+    }
 
 
 def test_ibkr_reconcile_blocks_local_open_order_missing_remotely() -> None:
@@ -688,21 +687,12 @@ def test_native_ibkr_reconciliation_requests_and_joins_all_order_streams(
 ) -> None:
     order = intent()
     submitted = submitted_report(order)
-    backend = object.__new__(NativeIBAPIBackend)
-    backend._config = IBKRConnectionConfig(client_id=0, timeout_seconds=0.1)
-    backend._clock = lambda: NOW + timedelta(seconds=2)
-    backend._lock = RLock()
+    backend = NativeIBAPIBackend.without_transport(
+        IBKRConnectionConfig(client_id=0, timeout_seconds=0.1),
+        clock=lambda: NOW + timedelta(seconds=2),
+    )
     backend._next_order_id = 9000
-    backend._intents = {}
     backend._reports = {9100: submitted}
-    backend._reconciliation_account = None
-    backend._known_intents_by_key = {}
-    backend._remote_seen_order_ids = set()
-    backend._unknown_remote_order_ids = set()
-    backend._open_orders_event = Event()
-    backend._completed_orders_event = Event()
-    backend._execution_events = {}
-    backend._next_request_id = 1_000_000
 
     class FakeNativeClient:
         def __init__(self, owner: NativeIBAPIBackend) -> None:
@@ -782,16 +772,9 @@ def test_native_ibkr_reconciliation_requests_and_joins_all_order_streams(
 
 
 def test_native_ibkr_collector_marks_unbound_manual_order_unknown() -> None:
-    backend = object.__new__(NativeIBAPIBackend)
-    backend._lock = RLock()
-    backend._clock = lambda: NOW
+    backend = NativeIBAPIBackend.without_transport(clock=lambda: NOW)
     backend._next_order_id = 9000
-    backend._intents = {}
-    backend._reports = {}
     backend._reconciliation_account = "DU123456"
-    backend._known_intents_by_key = {}
-    backend._remote_seen_order_ids = set()
-    backend._unknown_remote_order_ids = set()
     manual_order = SimpleNamespace(
         account="DU123456",
         orderRef="",
@@ -817,25 +800,16 @@ def test_native_ibkr_collector_marks_unbound_manual_order_unknown() -> None:
 
 def test_native_callbacks_are_monotone_and_commissions_are_order_independent() -> None:
     order = intent()
-    backend = object.__new__(NativeIBAPIBackend)
-    backend._clock = IncrementingClock()
-    backend._lock = RLock()
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
     backend._next_order_id = 9200
     backend._intents = {9100: order}
-    backend._reports = {}
-    backend._reconciliation_account = None
-    backend._known_intents_by_key = {}
-    backend._remote_seen_order_ids = set()
-    backend._unknown_remote_order_ids = set()
 
     backend._on_order_status(9100, "Filled", 10, 99.9)
     first = backend._reports[9100]
     backend._on_order_status(9100, "Submitted", 4, 99.8)
     assert backend._reports[9100] == first
 
-    backend._on_commission_report(
-        SimpleNamespace(execId="exec-2", commission=Decimal("0.75"))
-    )
+    backend._on_commission_report(SimpleNamespace(execId="exec-2", commission=Decimal("0.75")))
     backend._on_exec_details(
         1,
         SimpleNamespace(symbol="AAPL"),
@@ -881,9 +855,7 @@ def test_native_callbacks_are_monotone_and_commissions_are_order_independent() -
     )
     assert backend._reports[9100] == before_duplicate
 
-    backend._on_commission_report(
-        SimpleNamespace(execId="exec-1", commission=Decimal("1.25"))
-    )
+    backend._on_commission_report(SimpleNamespace(execId="exec-1", commission=Decimal("1.25")))
     final = backend._reports[9100]
     assert final.status is ExecutionStatus.FILLED
     assert final.filled_quantity == 10
@@ -892,11 +864,369 @@ def test_native_callbacks_are_monotone_and_commissions_are_order_independent() -
     assert not final.pending_commission
     assert final.update_sequence > first.update_sequence
     assert len(backend._fills_by_execution_id) == 2
-    backend._on_commission_report(
-        SimpleNamespace(execId="exec-1", commission=Decimal("1.25"))
-    )
+    backend._on_commission_report(SimpleNamespace(execId="exec-1", commission=Decimal("1.25")))
     assert backend._reports[9100] == final
     assert len(backend._fills_by_execution_id) == 2
+
+
+def callback_backend(order: OrderIntent) -> NativeIBAPIBackend:
+    """Backend double reduced to the state the native callbacks actually read."""
+
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
+    backend._next_order_id = 9200
+    backend._intents = {9100: order}
+    # A backend without transport is not connected; the tests that ask about
+    # readiness have to state that they are simulating an open session.
+    backend._client = SimpleNamespace(isConnected=lambda: True)
+    return backend
+
+
+def execution_details(
+    order: OrderIntent,
+    *,
+    execution_id: str,
+    shares: float,
+    price: float,
+    cumulative: float,
+    average: float,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        acctNumber=order.account_id,
+        orderId=9100,
+        orderRef=order.idempotency_key,
+        execId=execution_id,
+        shares=shares,
+        price=price,
+        cumQty=cumulative,
+        avgPrice=average,
+    )
+
+
+def test_native_average_fill_price_stays_within_money_precision() -> None:
+    """A weighted average that does not divide evenly is still a valid price.
+
+    One share at 10.00 and two at 10.01 average to 10.00666..., which Decimal
+    division carries to the context precision.  The money contract allows eight
+    decimal places, so an unnormalized aggregate would be rejected by its own
+    report model inside the broker callback thread.
+    """
+
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+
+    backend._on_exec_details(
+        1,
+        SimpleNamespace(symbol="AAPL"),
+        execution_details(
+            order,
+            execution_id="exec-1",
+            shares=1,
+            price=10.00,
+            cumulative=1,
+            average=10.00,
+        ),
+    )
+    backend._on_exec_details(
+        1,
+        SimpleNamespace(symbol="AAPL"),
+        execution_details(
+            order,
+            execution_id="exec-2",
+            shares=2,
+            price=10.01,
+            cumulative=3,
+            average=10.0066666,
+        ),
+    )
+
+    report = backend._reports[9100]
+    assert report.average_fill_price == Decimal("10.00666667")
+    assert report.average_fill_price.as_tuple().exponent >= -8
+    assert report.status is ExecutionStatus.FILLED
+    assert report.filled_quantity == 3
+    assert report.fill_count == 2
+    assert not backend._callback_failures
+
+
+def test_native_order_status_normalizes_a_broker_average_without_fills() -> None:
+    """IBKR derives the average itself and sends it as a C double."""
+
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+
+    backend._on_order_status(9100, "Filled", 3, 10.006666666666666)
+
+    report = backend._reports[9100]
+    assert report.average_fill_price == Decimal("10.00666667")
+    assert not backend._callback_failures
+
+
+def test_native_order_status_refuses_an_average_below_the_money_contract() -> None:
+    """An average that rounds to zero blocks the report instead of zeroing it.
+
+    The single normalization sits after the price chain, so a sub-contract
+    average from the broker is caught by the existing zero-price guard rather
+    than by a second check in the parsing step.
+    """
+
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+
+    backend._on_order_status(9100, "Filled", 3, 1e-9)
+
+    assert 9100 not in backend._reports
+    assert backend.deferred_inconsistencies == frozenset({"inconsistent:9100"})
+
+
+def test_native_execution_details_refuse_a_price_below_the_money_contract() -> None:
+    """A price that rounds to zero is refused, never stored as free shares."""
+
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+
+    backend._on_exec_details(
+        1,
+        SimpleNamespace(symbol="AAPL"),
+        execution_details(
+            order,
+            execution_id="exec-1",
+            shares=1,
+            price=1e-9,
+            cumulative=1,
+            average=1e-9,
+        ),
+    )
+
+    assert not backend._fills_by_execution_id
+    assert 9100 not in backend._reports
+    assert backend.deferred_inconsistencies == frozenset({"9100"})
+
+
+def test_native_execution_details_round_a_long_broker_price() -> None:
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+
+    backend._on_exec_details(
+        1,
+        SimpleNamespace(symbol="AAPL"),
+        execution_details(
+            order,
+            execution_id="exec-1",
+            shares=1,
+            price=0.1234567891234,
+            cumulative=1,
+            average=0.1234567891234,
+        ),
+    )
+
+    fill = backend._fills_by_execution_id["exec-1"]
+    assert fill.price == Decimal("0.12345679")
+    assert backend._reports[9100].average_fill_price == Decimal("0.12345679")
+
+
+def test_native_commission_report_normalizes_a_long_commission() -> None:
+    """The commission is the one value a stored fill may still gain."""
+
+    order = intent(quantity=3)
+    backend = callback_backend(order)
+    backend._on_exec_details(
+        1,
+        SimpleNamespace(symbol="AAPL"),
+        execution_details(
+            order,
+            execution_id="exec-1",
+            shares=1,
+            price=99.80,
+            cumulative=1,
+            average=99.80,
+        ),
+    )
+
+    backend._on_commission_report(SimpleNamespace(execId="exec-1", commission=0.1234567891234))
+
+    fill = backend._fills_by_execution_id["exec-1"]
+    assert fill.commission == Decimal("0.12345679")
+    assert fill.commission_final
+    report = backend._reports[9100]
+    assert report.fees == Decimal("0.12345679")
+    assert not report.pending_commission
+    assert not backend._callback_failures
+
+
+def test_native_callback_failure_latches_and_blocks_authoritative_operations() -> None:
+    """Handling a callback fault must not be cheaper than crashing was.
+
+    A raised callback ends the reader thread, which disconnects and therefore
+    fails every later readiness check.  The latch has to reproduce that refusal;
+    otherwise catching the error turns fail-closed into fail-silent.
+    """
+
+    order = intent()
+    backend = callback_backend(order)
+    assert backend.ready_for_orders()
+
+    backend._record_callback_failure("orderStatus", ValueError("unusable payload"))
+
+    assert backend.callback_failures == (("orderStatus", "ValueError"),)
+    assert not backend.ready_for_orders()
+    with pytest.raises(ibkr_module.IBKRTransportError, match="not authoritative"):
+        backend.reconcile_orders(order.account_id, ())
+
+    backend._on_order_status(9100, "Filled", 10, 99.9)
+    assert not backend.ready_for_orders()
+
+
+def test_native_discard_outside_reconciliation_reaches_the_next_one() -> None:
+    """A contradictory callback during trading is decided by the next reconcile."""
+
+    order = intent()
+    backend = callback_backend(order)
+
+    backend._on_order_status(9100, "Filled", 10, 99.9)
+    backend._on_order_status(9100, "Submitted", 4, 99.8)
+
+    assert backend.deferred_inconsistencies == frozenset({"inconsistent:9100"})
+    assert backend._unknown_remote_order_ids == set()
+
+
+def test_a_reconciliation_refused_during_setup_leaves_no_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refusal before the run starts must not mark the session as reconciling.
+
+    The setup binds persisted orders to their broker ids and can refuse a
+    non-numeric one.  If that refusal happened after the session was already
+    marked, every later reconciliation would fail with "already active" and the
+    adapter could never reconcile - or exit - again.
+    """
+
+    order = intent()
+    unusable = ExecutionReport(
+        order_id=order.order_id,
+        idempotency_key=order.idempotency_key,
+        status=ExecutionStatus.SUBMITTED,
+        broker_order_id="memory:order-1",
+        occurred_at=NOW,
+    )
+    backend = NativeIBAPIBackend.without_transport(
+        IBKRConnectionConfig(client_id=0, timeout_seconds=0.05),
+        clock=IncrementingClock(),
+    )
+    backend._client = SimpleNamespace(isConnected=lambda: True)
+    backend._deferred_inconsistencies = {"inconsistent:9100"}
+    monkeypatch.setattr(ibkr_module, "_ExecutionFilter", lambda: SimpleNamespace(acctCode=""))
+
+    for _ in range(2):
+        with pytest.raises(ibkr_module.IBKRTransportError, match="not numeric"):
+            backend.reconcile_orders(order.account_id, ((order, unusable),))
+        assert backend._reconciliation_account is None
+        assert backend.deferred_inconsistencies == frozenset({"inconsistent:9100"})
+
+
+def test_an_aborted_reconciliation_loses_nothing_and_wedges_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out reconciliation must be repeatable and must decide nothing.
+
+    The run takes the remembered discards over into its own result set before it
+    waits for the broker's end markers.  If it then aborts, those discards are
+    still undecided, and the session must not stay marked as reconciling -
+    otherwise one Gateway hiccup would block every later reconciliation.
+    """
+
+    class FakeExecutionFilter:
+        def __init__(self) -> None:
+            self.acctCode = ""
+
+    class SilentClient:
+        """Accepts every request and never delivers an end marker."""
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def isConnected(self) -> bool:
+            return True
+
+        def reqAllOpenOrders(self) -> None:
+            self.calls.append("reqAllOpenOrders")
+
+        def reqExecutions(self, *_args: object) -> None:
+            self.calls.append("reqExecutions")
+
+        def reqCompletedOrders(self, *_args: object) -> None:
+            self.calls.append("reqCompletedOrders")
+
+    monkeypatch.setattr(ibkr_module, "_ExecutionFilter", FakeExecutionFilter)
+
+    backend = NativeIBAPIBackend.without_transport(
+        IBKRConnectionConfig(client_id=0, timeout_seconds=0.05),
+        clock=IncrementingClock(),
+    )
+    backend._client = SilentClient()
+    backend._deferred_inconsistencies = {"inconsistent:9100"}
+
+    with pytest.raises(ibkr_module.IBKRTransportError, match="timed out"):
+        backend.reconcile_orders("DU123456", ())
+
+    assert backend.deferred_inconsistencies == frozenset({"inconsistent:9100"})
+    assert backend._reconciliation_account is None
+
+    # A second attempt must fail the same way, not with "already active".
+    with pytest.raises(ibkr_module.IBKRTransportError, match="timed out"):
+        backend.reconcile_orders("DU123456", ())
+    assert backend.deferred_inconsistencies == frozenset({"inconsistent:9100"})
+
+
+def test_backend_without_transport_owns_its_state_but_no_session() -> None:
+    """The callback reducers are testable without ibapi or a Gateway."""
+
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
+
+    assert not backend.is_connected()
+    assert not backend.ready_for_orders()
+    assert backend.callback_failures == ()
+    assert backend.deferred_inconsistencies == frozenset()
+    backend.disconnect()  # a backend without transport disconnects cleanly
+
+
+def test_native_portfolio_normalizes_a_broker_average_cost() -> None:
+    """IBKR derives the average cost of a partial position as a quotient."""
+
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
+
+    backend._on_portfolio(
+        SimpleNamespace(symbol="AAPL"),
+        3,
+        100.5,
+        10.006666666666666,
+        "DU123456",
+    )
+
+    position = backend._positions["DU123456"]["AAPL"]
+    assert position.average_price == Decimal("10.00666667")
+    assert position.quantity == 3
+    assert not backend.callback_failures
+
+
+def test_native_portfolio_latches_instead_of_dropping_a_position() -> None:
+    """A discarded position would surface later as a mismatch with the wrong cause.
+
+    The position set feeds the broker/local comparison before every exit, so a
+    silently dropped row turns into an unexplained reconciliation failure.
+    """
+
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
+
+    backend._on_portfolio(
+        SimpleNamespace(symbol="AAPL"),
+        3,
+        100.5,
+        float("nan"),
+        "DU123456",
+    )
+
+    assert "AAPL" not in backend._positions.get("DU123456", {})
+    assert [source for source, _ in backend.callback_failures] == ["updatePortfolio"]
 
 
 def test_native_order_status_preserves_persisted_fill_and_fee_evidence() -> None:
@@ -914,15 +1244,9 @@ def test_native_order_status_preserves_persisted_fill_and_fee_evidence() -> None
         pending_commission=False,
         update_sequence=8,
     )
-    backend = object.__new__(NativeIBAPIBackend)
-    backend._clock = IncrementingClock()
-    backend._lock = RLock()
+    backend = NativeIBAPIBackend.without_transport(clock=IncrementingClock())
     backend._intents = {9100: order}
     backend._reports = {9100: persisted}
-    backend._reconciliation_account = None
-    backend._known_intents_by_key = {}
-    backend._remote_seen_order_ids = set()
-    backend._unknown_remote_order_ids = set()
 
     backend._on_order_status(9100, "Filled", 10, 99.9)
 

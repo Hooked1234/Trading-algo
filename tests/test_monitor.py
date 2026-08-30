@@ -29,9 +29,7 @@ class MemoryMonitorLedger:
         self.intents: dict[str, OrderIntent] = {}
         self.reports: dict[str, ExecutionReport] = {}
 
-    async def get_order_intent_by_key(
-        self, idempotency_key: str
-    ) -> OrderIntent | None:
+    async def get_order_intent_by_key(self, idempotency_key: str) -> OrderIntent | None:
         return self.intents.get(idempotency_key)
 
     async def save(self, intent: OrderIntent) -> bool:
@@ -39,9 +37,7 @@ class MemoryMonitorLedger:
         self.intents.setdefault(intent.idempotency_key, intent)
         return created
 
-    async def get_execution_report(
-        self, order_id: str
-    ) -> ExecutionReport | None:
+    async def get_execution_report(self, order_id: str) -> ExecutionReport | None:
         return self.reports.get(order_id)
 
     async def save_report(self, report: ExecutionReport) -> None:
@@ -57,9 +53,7 @@ class RecordingExitExecutor:
     def has_pre_submit_guard(self) -> bool:
         return True
 
-    async def submit_with_one_reprice(
-        self, intent: OrderIntent
-    ) -> tuple[ExecutionReport, ...]:
+    async def submit_with_one_reprice(self, intent: OrderIntent) -> tuple[ExecutionReport, ...]:
         if not await self.ledger.save(intent):
             raise OrderIntentClaimLost(intent.order_id)
         self.calls.append(intent)
@@ -103,9 +97,8 @@ class RecordingExitExecutor:
         latest = latest_report or await self.ledger.get_execution_report(intent.order_id)
         if latest is None:
             raise ExecutionReconciliationError("missing test report")
-        if (
-            latest.status is ExecutionStatus.CANCELLED
-            and not intent.idempotency_key.endswith(":r1")
+        if latest.status is ExecutionStatus.CANCELLED and not intent.idempotency_key.endswith(
+            ":r1"
         ):
             return await self.resume_reprice_after_cancel(intent, latest)
         return (latest,)
@@ -146,9 +139,7 @@ def fresh_market(
     )
 
 
-def portfolio_with(
-    base: PortfolioState, position: Position, *, now: datetime
-) -> PortfolioState:
+def portfolio_with(base: PortfolioState, position: Position, *, now: datetime) -> PortfolioState:
     return base.model_copy(
         update={
             "as_of": now,
@@ -159,9 +150,7 @@ def portfolio_with(
     )
 
 
-def monitor_components() -> tuple[
-    MemoryMonitorLedger, RecordingExitExecutor, ExitMonitor
-]:
+def monitor_components() -> tuple[MemoryMonitorLedger, RecordingExitExecutor, ExitMonitor]:
     ledger = MemoryMonitorLedger()
     executor = RecordingExitExecutor(ledger)
     monitor = ExitMonitor(
@@ -276,9 +265,7 @@ async def test_exit_monitor_reports_missing_matching_state_fail_closed(
     cycle = await monitor.run_cycle(
         portfolio=portfolio_with(empty_portfolio, position, now=now),
         signals=(signal,) if include_signal else (),
-        markets=(fresh_market(snapshot.market, now=now),)
-        if include_market
-        else (),
+        markets=(fresh_market(snapshot.market, now=now),) if include_market else (),
         now=now,
     )
 
@@ -315,9 +302,7 @@ async def test_exit_monitor_blocks_stale_or_halted_market_state(
 
     outcome = cycle.outcomes[0]
     assert outcome.status is ExitMonitorStatus.BLOCKED
-    assert {"MARKET_NOT_FRESH", "MARKET_HALTED", "MARKET_STATE_STALE"} <= set(
-        outcome.reason_codes
-    )
+    assert {"MARKET_NOT_FRESH", "MARKET_HALTED", "MARKET_STATE_STALE"} <= set(outcome.reason_codes)
     assert executor.calls == []
 
 
@@ -387,9 +372,7 @@ async def test_exit_monitor_resumes_reprice_after_persisted_partial_cancel(
             now=retry_time,
         ),
         signals=(signal,),
-        markets=(
-            fresh_market(snapshot.market, now=retry_time, last=signal.stop_price),
-        ),
+        markets=(fresh_market(snapshot.market, now=retry_time, last=signal.stop_price),),
         now=retry_time,
     )
 
@@ -409,9 +392,7 @@ async def test_exit_monitor_isolates_guard_failure_per_position(
     decision_time,
 ) -> None:
     aapl_signal = signal_from(snapshot, long_insight, decision_time)
-    msft_signal = aapl_signal.model_copy(
-        update={"signal_id": "signal-msft", "symbol": "MSFT"}
-    )
+    msft_signal = aapl_signal.model_copy(update={"signal_id": "signal-msft", "symbol": "MSFT"})
     aapl_position = position_for(aapl_signal)
     msft_position = position_for(msft_signal)
     now = decision_time + timedelta(minutes=10)
@@ -422,20 +403,16 @@ async def test_exit_monitor_isolates_guard_failure_per_position(
     )
     msft_quote = snapshot.market.quote.model_copy(update={"symbol": "MSFT"})
     msft_market = fresh_market(
-        snapshot.market.model_copy(
-            update={"symbol": "MSFT", "quote": msft_quote}
-        ),
+        snapshot.market.model_copy(update={"symbol": "MSFT", "quote": msft_quote}),
         now=now,
         last=msft_signal.stop_price,
     )
     ledger = MemoryMonitorLedger()
 
     class SelectiveExecutor(RecordingExitExecutor):
-        async def submit_with_one_reprice(
-            self, intent: OrderIntent
-        ) -> tuple[ExecutionReport, ...]:
+        async def submit_with_one_reprice(self, intent: OrderIntent) -> tuple[ExecutionReport, ...]:
             if intent.symbol == "AAPL":
-                raise PreSubmitGuardRejected("blocked by refreshed risk")
+                raise PreSubmitGuardRejected(("BLOCKED_BY_REFRESHED_RISK",))
             return await super().submit_with_one_reprice(intent)
 
     executor = SelectiveExecutor(ledger)
@@ -464,7 +441,7 @@ async def test_exit_monitor_isolates_guard_failure_per_position(
         ExitMonitorStatus.BLOCKED,
         ExitMonitorStatus.EXIT_SUBMITTED,
     ]
-    assert cycle.outcomes[0].reason_codes == ("PRE_SUBMIT_GUARD_REJECTED",)
+    assert cycle.outcomes[0].reason_codes == ("BLOCKED_BY_REFRESHED_RISK",)
     assert [intent.symbol for intent in executor.calls] == ["MSFT"]
 
 
@@ -644,9 +621,7 @@ async def test_storage_failure_for_one_position_does_not_suppress_other_stop(
     now = decision_time + timedelta(minutes=10)
 
     class FaultyLedger(MemoryMonitorLedger):
-        async def get_order_intent_by_key(
-            self, idempotency_key: str
-        ) -> OrderIntent | None:
+        async def get_order_intent_by_key(self, idempotency_key: str) -> OrderIntent | None:
             if ":AAPL" in idempotency_key:
                 raise RuntimeError("simulated storage failure")
             return await super().get_order_intent_by_key(idempotency_key)
@@ -710,9 +685,7 @@ async def test_parallel_monitor_cycles_have_one_atomic_submission_winner(
             self.arrivals = 0
             self.release = asyncio.Event()
 
-        async def submit_with_one_reprice(
-            self, intent: OrderIntent
-        ) -> tuple[ExecutionReport, ...]:
+        async def submit_with_one_reprice(self, intent: OrderIntent) -> tuple[ExecutionReport, ...]:
             self.arrivals += 1
             if self.arrivals == 2:
                 self.release.set()

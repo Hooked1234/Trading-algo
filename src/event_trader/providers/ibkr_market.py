@@ -18,7 +18,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import ValidationError
 
-from event_trader.domain import DataSource, MarketSnapshot, Quote, utc_now
+from event_trader.domain import DataSource, MarketSnapshot, Quote, money, utc_now
 
 Clock = Callable[[], datetime]
 ContractFactory = Callable[[str], Any]
@@ -545,12 +545,18 @@ class IBAPIBackendHook:
             state = self._state_for_request(request_id)
             if state is None:
                 return
-            if tick_type in {1, 66}:  # BID / DELAYED_BID
-                state.bid = Decimal(str(price))
-                state.bid_at = now
-            elif tick_type in {2, 67}:  # ASK / DELAYED_ASK
-                state.ask = Decimal(str(price))
-                state.ask_at = now
+            try:
+                if tick_type in {1, 66}:  # BID / DELAYED_BID
+                    state.bid = money(Decimal(str(price)))
+                    state.bid_at = now
+                elif tick_type in {2, 67}:  # ASK / DELAYED_ASK
+                    state.ask = money(Decimal(str(price)))
+                    state.ask_at = now
+            except ArithmeticError:
+                # An unrepresentable tick is dropped rather than stored: the
+                # quote then ages out and fails the freshness check instead of
+                # presenting a price the contract would reject later.
+                return
 
     def on_tick_size(
         self,

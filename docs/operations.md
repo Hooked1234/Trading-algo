@@ -2,9 +2,12 @@
 
 ## Before every shadow or paper session
 
-1. Start IB Gateway manually and select the Paper Trading session.
+1. Start IB Gateway manually and select the Paper Trading session. Set
+   `TRADING_IBKR_PORT` to match: 4002 for IB Gateway, 7497 for TWS (the default).
 2. Run `uv run event-trader doctor`.
-3. Confirm the reported account starts with `DU`, is allowlisted, and live execution is false.
+3. Confirm the reported account matches `DU<digits>`, is allowlisted, and live
+   execution is false. For paper mode also confirm `TRADING_IBKR_CLIENT_ID=0`;
+   `doctor` does not report it, so it has to be checked in `.env`.
 4. Reconcile broker orders and positions before processing any new event.
 5. Confirm Networks A/B/C are live rather than delayed and system time is synchronized.
 6. Keep the research gate false until its immutable result artifact passes.
@@ -39,10 +42,27 @@ uv run event-trader acceptance-from-reports
 Paper mode is the only order-capable runtime. Before starting it, configure the
 SEC user agent, install the `ibkr` extra, authenticate a local IB Gateway Paper
 Trading session, set an allowlisted `TRADING_PAPER_ACCOUNT_ID=DU<digits>` and point
-`TRADING_PROMOTION_ARTIFACT_PATH` to the immutable promotion artifact.
+`TRADING_PROMOTION_ARTIFACT_PATH` to the immutable promotion artifact. Set
+`TRADING_IBKR_CLIENT_ID=0`; paper recovery requires client 0 so manual TWS orders
+are included in the authoritative order scope.
 
-The three supplied manifest files must hash to the exact experiment, dataset and
-code fingerprints recorded in that artifact:
+The dataset manifest is produced by `build-dataset-manifest`. The experiment and
+code manifests are bring-your-own files: no project command generates them, and
+`create-promotion` only hashes their exact bytes. Freeze all three files before
+promotion and pass the same byte-identical files to both commands. Omitting
+`--output` writes the promotion artifact to `TRADING_PROMOTION_ARTIFACT_PATH`:
+
+```bash
+uv run event-trader create-promotion data/state/research-result.json \
+  --research-trades-json data/state/research-trades.json \
+  --experiment-manifest data/state/experiment-manifest.json \
+  --dataset-manifest data/state/dataset-manifest.json \
+  --code-manifest data/state/code-manifest.json \
+  --experiment-id <experiment-id>
+```
+
+The runtime then re-hashes those same files and requires the experiment, dataset
+and code fingerprints to match the promotion artifact exactly:
 
 ```bash
 uv run event-trader run-paper \
@@ -82,9 +102,9 @@ Readiness is evaluated per operation: Reconcile establishes broker truth, Cancel
 does not depend on market data, Exit requires live data plus reconciled state, and
 Submit additionally requires all restored workflows to be terminal.
 
-Nach einem Prozessneustart muss `restore_from_storage()` vor `reconcile()` ausgeführt
-werden. Nicht vom Broker bestätigte oder noch offene wiederhergestellte Orders sperren
-neue Orders. Ein unbekannter Ausgang wird niemals durch erneutes Senden aufgelöst.
+After a process restart, `restore_from_storage()` must run before `reconcile()`.
+Restored orders that are still open or are not confirmed by the broker block new
+orders. An unknown outcome is never resolved by submitting the order again.
 
 ## Incident recovery
 
@@ -94,6 +114,6 @@ neue Orders. Ein unbekannter Ausgang wird niemals durch erneutes Senden aufgelö
 4. Close or reconcile unintended exposure manually in the paper account.
 5. Record the incident in the daily report and add a deterministic replay before resuming.
 
-Der native IBKR-Callback-Layer muss vor Paper-Freigabe einmal gegen eine echte lokale
-Gateway-Paper-Sitzung geprüft werden. Unit-Tests ersetzen weder Datenberechtigungen noch
-die Broker-seitige Fill- und Restart-Semantik.
+Before paper approval, validate the native IBKR callback layer once against a real
+local Gateway paper session. Unit tests do not replace market-data permissions or
+broker-side fill and restart semantics.

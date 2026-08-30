@@ -7,12 +7,14 @@ replays inject an ``IBKRBackend`` and therefore never open a socket.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import wraps
 from threading import Event, RLock, Thread
 from typing import Any, ClassVar, Protocol, runtime_checkable
+
+from pydantic import ValidationError
 
 from event_trader.broker import (
     BrokerError,
@@ -35,6 +37,8 @@ from event_trader.domain import (
     OrderSide,
     PortfolioState,
     Position,
+    is_paper_account_id,
+    money,
     utc_now,
 )
 from event_trader.risk import pending_entry_exposures
@@ -89,7 +93,7 @@ class IBKRConnectionConfig:
 
     host: str = "127.0.0.1"
     port: int = 7497
-    client_id: int = 41
+    client_id: int = 0
     timeout_seconds: float = 10.0
 
     def __post_init__(self) -> None:
@@ -144,9 +148,7 @@ class IBKRRecoveryStore(Protocol):
 
     async def get_execution_report(self, order_id: str) -> ExecutionReport | None: ...
 
-    async def list_order_intents(
-        self, *, limit: int = 1_000
-    ) -> tuple[OrderIntent, ...]: ...
+    async def list_order_intents(self, *, limit: int = 1_000) -> tuple[OrderIntent, ...]: ...
 
 
 def ibapi_available() -> bool:
@@ -157,13 +159,43 @@ def ibapi_available() -> bool:
 
 def _assert_paper_submission(intent: OrderIntent) -> None:
     if intent.submission_mode != "paper":
-        raise PaperAccountViolation(
-            "shadow intents are research artifacts and cannot reach IBKR"
-        )
+        raise PaperAccountViolation("shadow intents are research artifacts and cannot reach IBKR")
+
+
+def _latch_callback_faults(cls: type) -> type:
+    """Route every wrapper callback through the owner's fault latch.
+
+    ``EClient.run`` catches only ``KeyboardInterrupt``, ``SystemExit`` and
+    ``BadMessage``; anything else ends the reader thread, and with it every
+    further order, fill and cancel callback.  Swallowing the error here is only
+    defensible because ``_record_callback_failure`` then refuses every
+    authoritative operation.  Without that latch this wrapper would remove the
+    single signal the process has today and turn fail-closed into fail-silent.
+    """
+
+    for name, attribute in list(vars(cls).items()):
+        if name.startswith("__") or not callable(attribute):
+            continue
+        setattr(cls, name, _guarded_callback(name, attribute))
+    return cls
+
+
+def _guarded_callback(name: str, method: Any) -> Any:
+    @wraps(method)
+    def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(self, *args, **kwargs)
+        # Broad by intent: the latch below is the handler of last resort.
+        except Exception as exc:
+            self._owner._record_callback_failure(name, exc)
+            return None
+
+    return wrapper
 
 
 if _IBAPI_IMPORT_ERROR is None:  # pragma: no branch
 
+    @_latch_callback_faults
     class _NativeClient(_EWrapper, _EClient):  # type: ignore[misc,valid-type]
         def __init__(self, owner: NativeIBAPIBackend) -> None:
             _EWrapper.__init__(self)
@@ -268,9 +300,7 @@ if _IBAPI_IMPORT_ERROR is None:  # pragma: no branch
         ) -> None:
             hook = self._owner._bar_hook
             if hook is not None:
-                hook.on_realtime_bar(
-                    req_id, time_, open_, high, low, close, volume, wap, count
-                )
+                hook.on_realtime_bar(req_id, time_, open_, high, low, close, volume, wap, count)
 
         def completedOrder(
             self,
@@ -339,8 +369,14 @@ else:
             )
 
 
-class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway session
-    """Thin official-API backend; it never connects during construction."""
+class NativeIBAPIBackend:
+    """Thin official-API backend; it never connects during construction.
+
+    Only the methods that actually speak to IB Gateway are excluded from
+    coverage.  The callback reducers below turn broker messages into local
+    facts without touching the transport, and they carry the order and fill
+    truth of this system - measuring them is the point of the metric.
+    """
 
     _SUBMITTED_STATUSES: ClassVar[set[str]] = {
         "ApiPending",
@@ -360,12 +396,40 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             raise IBAPINotInstalled(
                 "optional dependency 'ibapi' is required for the native IBKR backend"
             ) from _IBAPI_IMPORT_ERROR
+        self._init_state(config, clock=clock)
+        self._client = _NativeClient(self)
+
+    @classmethod
+    def without_transport(
+        cls,
+        config: IBKRConnectionConfig | None = None,
+        *,
+        clock: Clock = utc_now,
+    ) -> NativeIBAPIBackend:
+        """Build a backend that owns its callback state but opens no socket.
+
+        The callback reducers turn broker messages into local facts and do not
+        touch the transport.  Exercising them must therefore not require
+        ``ibapi`` or a running Gateway; this is also the only way this layer can
+        be tested on a machine that has neither.
+        """
+
+        backend = object.__new__(cls)
+        backend._init_state(config, clock=clock)
+        backend._client = None
+        return backend
+
+    def _init_state(
+        self,
+        config: IBKRConnectionConfig | None = None,
+        *,
+        clock: Clock = utc_now,
+    ) -> None:
         self._config = config or IBKRConnectionConfig()
         self._clock = clock
         self._lock = RLock()
         self._ready_event = Event()
         self._account_event = Event()
-        self._client = _NativeClient(self)
         self._thread: Thread | None = None
         self._next_order_id: int | None = None
         self._account_ids: tuple[str, ...] = ()
@@ -373,6 +437,8 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         self._intents: dict[int, OrderIntent] = {}
         self._reports: dict[int, ExecutionReport] = {}
         self._fills_by_execution_id: dict[str, ExecutionFill] = {}
+        self._callback_failures: list[tuple[str, str]] = []
+        self._deferred_inconsistencies: set[str] = set()
         self._fill_ids_by_broker_order: dict[int, set[str]] = {}
         self._pending_commissions: dict[str, Decimal] = {}
         self._account_values: dict[str, dict[str, Decimal]] = {}
@@ -408,7 +474,9 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         self._market_data_hook = market_data
         self._bar_hook = bars
 
-    def connect(self) -> None:
+    def connect(self) -> None:  # pragma: no cover - live IB Gateway
+        if self._client is None:
+            raise IBKRTransportError("this backend was built without a transport")
         if self.is_connected():
             return
         try:
@@ -430,11 +498,11 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             self._client.reqAutoOpenOrders(True)
 
     def disconnect(self) -> None:
-        if self._client.isConnected():
+        if self._client is not None and self._client.isConnected():
             self._client.disconnect()
 
     def is_connected(self) -> bool:
-        return bool(self._client.isConnected())
+        return self._client is not None and bool(self._client.isConnected())
 
     def account_ids(self) -> tuple[str, ...]:
         with self._lock:
@@ -442,7 +510,11 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
 
     def ready_for_orders(self) -> bool:
         with self._lock:
-            return self.is_connected() and self._next_order_id is not None
+            return (
+                self.is_connected()
+                and self._next_order_id is not None
+                and not self._callback_failures
+            )
 
     def market_data_live(self) -> bool:
         with self._lock:
@@ -458,7 +530,7 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
 
         self._on_live_market_data()
 
-    def submit_order(self, intent: OrderIntent) -> str:
+    def submit_order(self, intent: OrderIntent) -> str:  # pragma: no cover - live IB Gateway
         _assert_paper_submission(intent)
         if not self.ready_for_orders():
             raise IBKRTransportError("IBKR has no valid next order id")
@@ -512,6 +584,14 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
     ) -> IBKRRemoteOrderSnapshot:
         """Request open, completed, and execution streams and await all end markers."""
 
+        # A broken callback layer invalidates everything this session could
+        # report, so it is refused before any transport question is asked.
+        with self._lock:
+            if self._callback_failures:
+                raise IBKRTransportError(
+                    f"{len(self._callback_failures)} IBKR callback(s) could not be "
+                    "processed; this session's order view is not authoritative"
+                )
         if not self.is_connected():
             raise IBKRTransportError("IBKR is disconnected during order reconciliation")
         if _ExecutionFilter is None:
@@ -519,89 +599,113 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         with self._lock:
             if self._reconciliation_account is not None:
                 raise IBKRTransportError("an IBKR order reconciliation is already active")
-            self._reconciliation_account = account_id
+            # Everything that can still refuse the run happens first.  Marking
+            # the session as reconciling is what the finally below has to undo,
+            # so nothing that throws may sit between the mark and the try.
             for intent, _report in known_orders:
                 _assert_paper_submission(intent)
-            self._known_intents_by_key = {
-                intent.idempotency_key: intent for intent, _report in known_orders
-            }
+            bound: list[tuple[int, OrderIntent, ExecutionReport]] = []
             for intent, report in known_orders:
                 if report.broker_order_id is None:
                     continue
                 try:
-                    broker_order_id = int(report.broker_order_id)
-                    self._intents[broker_order_id] = intent
-                    self._reports.setdefault(broker_order_id, report)
+                    bound.append((int(report.broker_order_id), intent, report))
                 except ValueError as exc:
                     raise IBKRTransportError(
                         "persisted IBKR broker order id is not numeric"
                     ) from exc
+
+            self._known_intents_by_key = {
+                intent.idempotency_key: intent for intent, _report in known_orders
+            }
+            for broker_order_id, intent, report in bound:
+                self._intents[broker_order_id] = intent
+                self._reports.setdefault(broker_order_id, report)
             self._remote_seen_order_ids = set()
-            self._unknown_remote_order_ids = set()
+            # Discards from normal trading are only decidable here.
+            self._unknown_remote_order_ids = set(self._deferred_inconsistencies)
+            self._deferred_inconsistencies = set()
             self._open_orders_event = Event()
             self._completed_orders_event = Event()
             request_id = self._next_request_id
             self._next_request_id += 1
             execution_event = Event()
             self._execution_events = {request_id: execution_event}
+            self._reconciliation_account = account_id
 
-        execution_filter = _ExecutionFilter()
-        execution_filter.acctCode = account_id
+        completed = False
         try:
-            self._client.reqAllOpenOrders()
-            self._client.reqExecutions(request_id, execution_filter)
-            self._client.reqCompletedOrders(False)
-        except Exception as exc:
-            raise IBKRTransportError(
-                f"IBKR reconciliation request failed: {exc.__class__.__name__}"
-            ) from exc
-
-        markers = (
-            ("openOrderEnd", self._open_orders_event),
-            ("execDetailsEnd", execution_event),
-            ("completedOrdersEnd", self._completed_orders_event),
-        )
-        for marker, event in markers:
-            if not event.wait(self._config.timeout_seconds):
+            execution_filter = _ExecutionFilter()
+            execution_filter.acctCode = account_id
+            try:
+                self._client.reqAllOpenOrders()
+                self._client.reqExecutions(request_id, execution_filter)
+                self._client.reqCompletedOrders(False)
+            except Exception as exc:
                 raise IBKRTransportError(
-                    f"IBKR reconciliation timed out before {marker}"
-                )
+                    f"IBKR reconciliation request failed: {exc.__class__.__name__}"
+                ) from exc
 
-        with self._lock:
-            self._ensure_execution_state()
-            seen = frozenset(self._remote_seen_order_ids)
-            unknown = frozenset(self._unknown_remote_order_ids)
-            reports = tuple(
-                sorted(
-                    (
-                        report
-                        for broker_id, report in self._reports.items()
-                        if report.order_id in seen
-                        and self._intents[broker_id].account_id == account_id
-                    ),
-                    key=lambda report: (report.occurred_at, report.order_id),
-                )
+            markers = (
+                ("openOrderEnd", self._open_orders_event),
+                ("execDetailsEnd", execution_event),
+                ("completedOrdersEnd", self._completed_orders_event),
             )
-            fills = tuple(
-                sorted(
-                    (
-                        fill
-                        for fill in self._fills_by_execution_id.values()
-                        if fill.order_id in seen
-                    ),
-                    key=lambda fill: (fill.occurred_at, fill.execution_id),
-                )
-            )
-            self._reconciliation_account = None
-            self._execution_events = {}
-        return IBKRRemoteOrderSnapshot(
-            reports=reports,
-            seen_order_ids=seen,
-            unknown_remote_order_ids=unknown,
-            fills=fills,
-        )
+            for marker, event in markers:
+                if not event.wait(self._config.timeout_seconds):
+                    raise IBKRTransportError(f"IBKR reconciliation timed out before {marker}")
 
-    def portfolio_state(self, account_id: str) -> PortfolioState:
+            with self._lock:
+                seen = frozenset(self._remote_seen_order_ids)
+                unknown = frozenset(self._unknown_remote_order_ids)
+                reports = tuple(
+                    sorted(
+                        (
+                            report
+                            for broker_id, report in self._reports.items()
+                            if report.order_id in seen
+                            and self._intents[broker_id].account_id == account_id
+                        ),
+                        key=lambda report: (report.occurred_at, report.order_id),
+                    )
+                )
+                fills = tuple(
+                    sorted(
+                        (
+                            fill
+                            for fill in self._fills_by_execution_id.values()
+                            if fill.order_id in seen
+                        ),
+                        key=lambda fill: (fill.occurred_at, fill.execution_id),
+                    )
+                )
+                # Closed inside the same lock as the snapshot: afterwards no
+                # callback can still write into a set that was already returned.
+                self._reconciliation_account = None
+                self._execution_events = {}
+                completed = True
+            return IBKRRemoteOrderSnapshot(
+                reports=reports,
+                seen_order_ids=seen,
+                unknown_remote_order_ids=unknown,
+                fills=fills,
+            )
+        finally:
+            if not completed:
+                with self._lock:
+                    # An aborted reconciliation decides nothing.  The discards it
+                    # took over are still undecided and have to survive for the
+                    # next attempt instead of vanishing with the failed run.
+                    self._deferred_inconsistencies |= self._unknown_remote_order_ids
+                    # Released on every abort: a single timeout must not leave
+                    # the session marked as reconciling forever.
+                    self._reconciliation_account = None
+                    self._execution_events = {}
+
+    # pragma-scoped below: this method needs a live IB Gateway session.
+    def portfolio_state(  # pragma: no cover
+        self, account_id: str
+    ) -> PortfolioState:
         if account_id not in self.account_ids():
             raise IBKRTransportError("paper account is not present in IBKR session")
         event = Event()
@@ -660,11 +764,10 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         self, broker_order_id: int, raw_status: str, filled: Any, avg_price: float
     ) -> None:
         with self._lock:
-            self._ensure_execution_state()
             intent = self._intents.get(broker_order_id)
             if intent is None:
                 return
-            if getattr(self, "_reconciliation_account", None) == intent.account_id:
+            if self._reconciliation_account == intent.account_id:
                 self._remote_seen_order_ids.add(intent.order_id)
             try:
                 filled_decimal = Decimal(str(filled))
@@ -677,13 +780,10 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                     raise ValueError("invalid cumulative fill quantity")
                 filled_quantity = int(filled_decimal)
                 average_fill_price = (
-                    Decimal(str(avg_price))
-                    if filled_quantity > 0
-                    else Decimal("0")
+                    Decimal(str(avg_price)) if filled_quantity > 0 else Decimal("0")
                 )
-                if (
-                    not average_fill_price.is_finite()
-                    or (filled_quantity > 0 and average_fill_price <= 0)
+                if not average_fill_price.is_finite() or (
+                    filled_quantity > 0 and average_fill_price <= 0
                 ):
                     raise ValueError("invalid average fill price")
             except (ArithmeticError, TypeError, ValueError):
@@ -716,17 +816,24 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             if summed_fill_quantity > intent.quantity:
                 self._mark_inconsistent(intent, broker_order_id)
                 return
-            if fills and summed_fill_quantity == aggregate_quantity:
-                aggregate_price = sum(
-                    (fill.price * fill.quantity for fill in fills),
-                    Decimal("0"),
-                ) / Decimal(summed_fill_quantity)
-            elif filled_quantity == aggregate_quantity and average_fill_price > 0:
-                aggregate_price = average_fill_price
-            elif current is not None:
-                aggregate_price = current.average_fill_price
-            else:
-                aggregate_price = Decimal("0")
+            try:
+                if fills and summed_fill_quantity == aggregate_quantity:
+                    aggregate_price = sum(
+                        (fill.price * fill.quantity for fill in fills),
+                        Decimal("0"),
+                    ) / Decimal(summed_fill_quantity)
+                elif filled_quantity == aggregate_quantity and average_fill_price > 0:
+                    aggregate_price = average_fill_price
+                elif current is not None:
+                    aggregate_price = current.average_fill_price
+                else:
+                    aggregate_price = Decimal("0")
+                # A weighted average is a division: it is the one place in this
+                # callback where the contract's precision can be exceeded.
+                aggregate_price = money(aggregate_price)
+            except ArithmeticError:
+                self._mark_inconsistent(intent, broker_order_id)
+                return
             if aggregate_quantity > 0 and aggregate_price <= 0:
                 self._mark_inconsistent(intent, broker_order_id)
                 return
@@ -752,43 +859,36 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                 len(fills),
                 current.fill_count if current is not None else 0,
             )
-            observed_pending = bool(fills) and any(
-                not fill.commission_final for fill in fills
-            )
+            observed_pending = bool(fills) and any(not fill.commission_final for fill in fills)
             if current is None or len(fills) > current.fill_count:
                 pending_commission = observed_pending
             elif len(fills) < current.fill_count:
                 pending_commission = current.pending_commission
             else:
                 pending_commission = current.pending_commission and observed_pending
-            candidate = ExecutionReport(
-                order_id=intent.order_id,
-                idempotency_key=intent.idempotency_key,
-                status=status,
-                filled_quantity=aggregate_quantity,
-                average_fill_price=aggregate_price,
-                fees=fees,
-                slippage_bps=self._slippage_bps(intent, aggregate_price),
-                broker_order_id=str(broker_order_id),
-                message=raw_status,
-                occurred_at=self._clock(),
-                fill_count=fill_count,
-                pending_commission=pending_commission,
-                update_sequence=(current.update_sequence + 1 if current is not None else 1),
-            )
+            try:
+                candidate = ExecutionReport(
+                    order_id=intent.order_id,
+                    idempotency_key=intent.idempotency_key,
+                    status=status,
+                    filled_quantity=aggregate_quantity,
+                    average_fill_price=aggregate_price,
+                    fees=fees,
+                    slippage_bps=self._slippage_bps(intent, aggregate_price),
+                    broker_order_id=str(broker_order_id),
+                    message=raw_status,
+                    occurred_at=self._clock(),
+                    fill_count=fill_count,
+                    pending_commission=pending_commission,
+                    update_sequence=(current.update_sequence + 1 if current is not None else 1),
+                )
+            except (ArithmeticError, ValidationError, ValueError) as exc:
+                self._record_callback_failure("orderStatus", exc)
+                self._mark_inconsistent(intent, broker_order_id)
+                return
             if current is not None and self._same_report_fact(current, candidate):
                 return
             self._reports[broker_order_id] = candidate
-
-    def _ensure_execution_state(self) -> None:
-        """Backfill callback state for native-backend test doubles and reconnects."""
-
-        if not hasattr(self, "_fills_by_execution_id"):
-            self._fills_by_execution_id = {}
-        if not hasattr(self, "_fill_ids_by_broker_order"):
-            self._fill_ids_by_broker_order = {}
-        if not hasattr(self, "_pending_commissions"):
-            self._pending_commissions = {}
 
     def _fills_for_order(self, broker_order_id: int) -> tuple[ExecutionFill, ...]:
         identifiers = self._fill_ids_by_broker_order.get(broker_order_id, set())
@@ -799,9 +899,69 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             )
         )
 
+    def _record_callback_failure(self, source: str, error: Exception) -> None:
+        """Latch an adapter fault so no later operation trusts this session.
+
+        A callback that cannot turn a broker message into a valid fact leaves
+        the local order view incomplete.  Continuing would present a stale
+        report as current, so the fault is latched and both submission and
+        reconciliation refuse until the session is rebuilt.  The latch
+        deliberately replaces the process-level signal that a raised callback
+        used to give: catching the error must not be cheaper than crashing was.
+
+        Cancelling is not gated by the latch itself, but it is not therefore
+        available: the CANCEL readiness profile requires ``reconciled``, and the
+        next reconciliation attempt clears that flag before it fails on the
+        latch.  A cancel is possible until that attempt, and not afterwards.
+        Whether a purely exposure-reducing cancel should outlive its session is
+        a decision for ADR-023, not something this method may quietly assume.
+        """
+
+        with self._lock:
+            self._callback_failures.append((source, error.__class__.__name__))
+
+    @property
+    def callback_failures(self) -> tuple[tuple[str, str], ...]:
+        """Latched adapter faults; a non-empty result blocks every order path."""
+
+        with self._lock:
+            return tuple(self._callback_failures)
+
+    @property
+    def deferred_inconsistencies(self) -> frozenset[str]:
+        """Callbacks discarded outside a reconciliation window."""
+
+        with self._lock:
+            return frozenset(self._deferred_inconsistencies)
+
+    def _discard_remote_callback(self, remote_token: str) -> None:
+        """Record one discarded remote callback, inside or outside a reconciliation.
+
+        Mirrors :meth:`_mark_inconsistent` for the callbacks keyed by a remote
+        token rather than by a known intent: a discard during normal trading is
+        remembered and folded into the next reconciliation instead of
+        disappearing together with the callback that caused it.
+        """
+
+        if self._reconciliation_account is not None:
+            self._unknown_remote_order_ids.add(remote_token)
+            return
+        self._deferred_inconsistencies.add(remote_token)
+
     def _mark_inconsistent(self, intent: OrderIntent, broker_order_id: int) -> None:
-        if getattr(self, "_reconciliation_account", None) == intent.account_id:
-            self._unknown_remote_order_ids.add(f"inconsistent:{broker_order_id}")
+        """Record one discarded callback, inside or outside a reconciliation.
+
+        Outside an active reconciliation this used to be a silent no-op, so a
+        contradictory callback during normal trading vanished.  The discard is
+        now remembered and folded into the next reconciliation, which is the
+        only place that can decide what it means.
+        """
+
+        token = f"inconsistent:{broker_order_id}"
+        if self._reconciliation_account == intent.account_id:
+            self._unknown_remote_order_ids.add(token)
+            return
+        self._deferred_inconsistencies.add(token)
 
     @classmethod
     def _status_for_callback(
@@ -833,15 +993,11 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             return 0.0
         if intent.side in {OrderSide.BUY, OrderSide.BUY_TO_COVER}:
             slippage = (
-                (average_fill_price - intent.limit_price)
-                / intent.limit_price
-                * Decimal("10000")
+                (average_fill_price - intent.limit_price) / intent.limit_price * Decimal("10000")
             )
         else:
             slippage = (
-                (intent.limit_price - average_fill_price)
-                / intent.limit_price
-                * Decimal("10000")
+                (intent.limit_price - average_fill_price) / intent.limit_price * Decimal("10000")
             )
         return float(slippage)
 
@@ -920,22 +1076,18 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         except Exception:
             return False
         expected_action = (
-            "BUY"
-            if intent.side in {OrderSide.BUY, OrderSide.BUY_TO_COVER}
-            else "SELL"
+            "BUY" if intent.side in {OrderSide.BUY, OrderSide.BUY_TO_COVER} else "SELL"
         )
         return all(
             (
                 order_ref == intent.idempotency_key,
                 str(getattr(contract, "symbol", "")).strip().upper()
                 == intent.symbol.strip().upper(),
-                str(getattr(order, "action", "")).strip().upper()
-                == expected_action,
+                str(getattr(order, "action", "")).strip().upper() == expected_action,
                 quantity == intent.quantity,
                 str(getattr(order, "orderType", "")).strip().upper() == "LMT",
                 limit_price == intent.limit_price,
-                str(getattr(order, "tif", "")).strip().upper()
-                == intent.time_in_force,
+                str(getattr(order, "tif", "")).strip().upper() == intent.time_in_force,
                 str(getattr(order, "account", "")).strip() == intent.account_id,
             )
         )
@@ -949,7 +1101,6 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         broker_order_id = int(getattr(execution, "orderId", -1))
         order_ref = str(getattr(execution, "orderRef", "")).strip()
         with self._lock:
-            self._ensure_execution_state()
             target_account = self._reconciliation_account
             if target_account is not None and target_account != account_id:
                 return
@@ -966,8 +1117,7 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                 or str(getattr(contract, "symbol", "")).strip().upper()
                 != intent.symbol.strip().upper()
             ):
-                if target_account is not None:
-                    self._unknown_remote_order_ids.add(remote_token)
+                self._discard_remote_callback(remote_token)
                 return
             self._intents[broker_order_id] = intent
             if target_account is not None:
@@ -997,26 +1147,34 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                 cumulative = int(cumulative_decimal)
                 if cumulative < quantity or cumulative > intent.quantity:
                     raise ValueError("invalid cumulative execution quantity")
+                price = money(price)
+                average = money(average)
+                if price <= 0 or average <= 0:
+                    raise ValueError("execution price rounds below the contract")
             except (ArithmeticError, AttributeError, TypeError, ValueError):
-                if target_account is not None:
-                    self._unknown_remote_order_ids.add(remote_token)
+                self._discard_remote_callback(remote_token)
                 return
 
             existing = self._fills_by_execution_id.get(execution_id)
-            pending_commission = self._pending_commissions.pop(execution_id, None)
-            fill = ExecutionFill(
-                order_id=intent.order_id,
-                execution_id=execution_id,
-                broker_order_id=str(broker_order_id),
-                symbol=intent.symbol,
-                side=intent.side,
-                quantity=quantity,
-                price=price,
-                cumulative_quantity=cumulative,
-                commission=(pending_commission or Decimal("0")),
-                commission_final=pending_commission is not None,
-                occurred_at=(existing.occurred_at if existing is not None else self._clock()),
-            )
+            pending_commission = self._pending_commissions.get(execution_id)
+            try:
+                fill = ExecutionFill(
+                    order_id=intent.order_id,
+                    execution_id=execution_id,
+                    broker_order_id=str(broker_order_id),
+                    symbol=intent.symbol,
+                    side=intent.side,
+                    quantity=quantity,
+                    price=price,
+                    cumulative_quantity=cumulative,
+                    commission=(pending_commission or Decimal("0")),
+                    commission_final=pending_commission is not None,
+                    occurred_at=(existing.occurred_at if existing is not None else self._clock()),
+                )
+            except (ArithmeticError, ValidationError, ValueError) as exc:
+                self._record_callback_failure("execDetails", exc)
+                self._mark_inconsistent(intent, broker_order_id)
+                return
             if existing is not None:
                 same_fill = fill.model_copy(
                     update={
@@ -1025,21 +1183,21 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                     }
                 )
                 if same_fill != existing:
-                    if target_account is not None:
-                        self._unknown_remote_order_ids.add(remote_token)
+                    self._discard_remote_callback(remote_token)
                     return
                 if pending_commission is None:
                     fill = existing
                 elif existing.commission_final:
                     if existing.commission != pending_commission:
-                        if target_account is not None:
-                            self._unknown_remote_order_ids.add(remote_token)
+                        self._discard_remote_callback(remote_token)
                         return
                     fill = existing
+            # Only now is the fill actually taken over.  Consuming the pending
+            # commission any earlier would lose it on every path that returns
+            # above, and a commission is never recoverable from a later replay.
+            self._pending_commissions.pop(execution_id, None)
             self._fills_by_execution_id[execution_id] = fill
-            self._fill_ids_by_broker_order.setdefault(broker_order_id, set()).add(
-                execution_id
-            )
+            self._fill_ids_by_broker_order.setdefault(broker_order_id, set()).add(execution_id)
 
         raw_status = "Filled" if cumulative >= intent.quantity else "Submitted"
         self._on_order_status(
@@ -1057,11 +1215,11 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             commission = Decimal(str(commission_report.commission))
             if not execution_id or not commission.is_finite() or commission < 0:
                 raise ValueError("invalid commission report")
+            commission = money(commission)
         except (ArithmeticError, AttributeError, TypeError, ValueError):
             return
 
         with self._lock:
-            self._ensure_execution_state()
             existing = self._fills_by_execution_id.get(execution_id)
             if existing is None:
                 pending = self._pending_commissions.get(execution_id)
@@ -1077,9 +1235,15 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                         return
                     self._mark_inconsistent(intent, broker_order_id)
                 return
-            finalized = existing.model_copy(
-                update={"commission": commission, "commission_final": True}
-            )
+            # ``model_copy`` does not validate.  A commission is the only value a
+            # stored fill may still gain, so it is written through the contract.
+            try:
+                finalized = ExecutionFill.model_validate(
+                    existing.model_dump() | {"commission": commission, "commission_final": True}
+                )
+            except (ArithmeticError, ValidationError, ValueError) as exc:
+                self._record_callback_failure("commissionReport", exc)
+                return
             self._fills_by_execution_id[execution_id] = finalized
             try:
                 broker_order_id = int(finalized.broker_order_id or "-1")
@@ -1089,9 +1253,7 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             if current is None:
                 return
             raw_status = current.message or (
-                "Filled"
-                if current.status is ExecutionStatus.FILLED
-                else "Submitted"
+                "Filled" if current.status is ExecutionStatus.FILLED else "Submitted"
             )
             filled_quantity = current.filled_quantity
             average_fill_price = current.average_fill_price
@@ -1143,8 +1305,8 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
             quantity = int(abs(position_decimal))
             if position_decimal == 0 or Decimal(quantity) != abs(position_decimal):
                 return
-            parsed_market_price = Decimal(str(market_price))
-            parsed_average_cost = abs(Decimal(str(average_cost)))
+            parsed_market_price = money(Decimal(str(market_price)))
+            parsed_average_cost = money(abs(Decimal(str(average_cost))))
             if parsed_market_price <= 0 or parsed_average_cost <= 0:
                 return
             symbol = str(contract.symbol)
@@ -1155,7 +1317,11 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
                 market_price=parsed_market_price,
                 average_price=parsed_average_cost,
             )
-        except Exception:
+        except (ArithmeticError, AttributeError, TypeError, ValueError) as exc:
+            # Dropping a position here would surface later as a mismatch between
+            # broker and local state, naming the wrong cause.  The fault is
+            # latched where it happens instead.
+            self._record_callback_failure("updatePortfolio", exc)
             return
         with self._lock:
             self._positions.setdefault(account_name, {})[symbol] = position
@@ -1170,7 +1336,7 @@ class NativeIBAPIBackend:  # pragma: no cover - requires a real local IB Gateway
         # Store only a bounded provider message; never include advanced reject JSON.
         with self._lock:
             self._last_error = (req_id, code, message[:500])
-            hook = getattr(self, "_bar_hook", None)
+            hook = self._bar_hook
         if hook is not None:
             hook.on_error(req_id, code, message)
 
@@ -1208,7 +1374,7 @@ class IBKRBrokerAdapter:
 
     @staticmethod
     def _assert_du_paper_account(account_id: str) -> None:
-        if re.fullmatch(r"DU\d+", account_id, flags=re.IGNORECASE) is None:
+        if not is_paper_account_id(account_id):
             raise PaperAccountViolation(
                 "IBKR execution requires a paper account id matching 'DU<digits>'"
             )
@@ -1225,9 +1391,7 @@ class IBKRBrokerAdapter:
             self._backend.disconnect()
         self._reconciled = False
 
-    def readiness(
-        self, profile: ReadinessProfile = ReadinessProfile.SUBMIT
-    ) -> BrokerReadiness:
+    def readiness(self, profile: ReadinessProfile = ReadinessProfile.SUBMIT) -> BrokerReadiness:
         profile = ReadinessProfile(profile)
         backend = self._backend
         dependency_ready = backend is not None or ibapi_available()
@@ -1236,16 +1400,14 @@ class IBKRBrokerAdapter:
         account_present = self.account_id in accounts
         order_channel = connected and backend is not None and backend.ready_for_orders()
         order_scope_authoritative = (
-            connected
-            and backend is not None
-            and backend.order_scope_authoritative()
+            connected and backend is not None and backend.order_scope_authoritative()
         )
         market_data = (
             connected and backend is not None and backend.market_data_live()
             if self._require_live_market_data
             else True
         )
-        du_paper_id = re.fullmatch(r"DU\d+", self.account_id, flags=re.IGNORECASE) is not None
+        du_paper_id = is_paper_account_id(self.account_id)
         checks = (
             ReadinessCheck(
                 "du_paper_account_id",
@@ -1291,8 +1453,7 @@ class IBKRBrokerAdapter:
         required = {
             ReadinessProfile.RECONCILE: common,
             ReadinessProfile.CANCEL: common | {"reconciled"},
-            ReadinessProfile.EXIT: common
-            | {"order_channel", "market_data_live", "reconciled"},
+            ReadinessProfile.EXIT: common | {"order_channel", "market_data_live", "reconciled"},
             ReadinessProfile.SUBMIT: common
             | {
                 "order_channel",
@@ -1330,18 +1491,12 @@ class IBKRBrokerAdapter:
         self._reconciled = False
         open_intents = await store.list_orders_for_reconciliation(limit=max_orders + 1)
         intents_by_id = {intent.order_id: intent for intent in open_intents}
-        all_intents_loader = getattr(store, "list_order_intents", None)
-        if callable(all_intents_loader):
-            all_intents = await all_intents_loader(limit=max_orders + 1)
-            for persisted_intent in all_intents:
-                intents_by_id.setdefault(persisted_intent.order_id, persisted_intent)
+        all_intents = await store.list_order_intents(limit=max_orders + 1)
+        for persisted_intent in all_intents:
+            intents_by_id.setdefault(persisted_intent.order_id, persisted_intent)
         intents = tuple(
             sorted(
-                (
-                    intent
-                    for intent in intents_by_id.values()
-                    if intent.submission_mode == "paper"
-                ),
+                (intent for intent in intents_by_id.values() if intent.submission_mode == "paper"),
                 key=lambda item: (item.created_at, item.order_id),
             )
         )
@@ -1463,9 +1618,7 @@ class IBKRBrokerAdapter:
         if not remote_snapshot.complete:
             raise IBKRRecoveryIncomplete("IBKR order snapshot is incomplete")
         if remote_snapshot.unknown_remote_order_ids:
-            raise IBKRRecoveryIncomplete(
-                "IBKR returned unknown or manual remote order activity"
-            )
+            raise IBKRRecoveryIncomplete("IBKR returned unknown or manual remote order activity")
         remote_reports: list[ExecutionReport] = []
         for raw_report in remote_snapshot.reports:
             try:
@@ -1499,9 +1652,7 @@ class IBKRBrokerAdapter:
                 f"IBKR did not confirm {len(unresolved)} restored open order(s)"
             )
         local_open_orders = {
-            report.order_id
-            for report in self._state.reports()
-            if report.status not in terminal
+            report.order_id for report in self._state.reports() if report.status not in terminal
         }
         missing_local_orders = local_open_orders - remote_snapshot.seen_order_ids
         if missing_local_orders:
@@ -1567,19 +1718,13 @@ class IBKRBrokerAdapter:
             intent = self._state.intent(report.order_id)
             if intent.submission_mode != "paper":
                 continue
-            sign = (
-                1
-                if intent.side in {OrderSide.BUY, OrderSide.BUY_TO_COVER}
-                else -1
-            )
+            sign = 1 if intent.side in {OrderSide.BUY, OrderSide.BUY_TO_COVER} else -1
             symbol = intent.symbol.strip().upper()
             expected[symbol] = expected.get(symbol, 0) + sign * report.filled_quantity
         expected = {symbol: quantity for symbol, quantity in expected.items() if quantity}
         actual = {
             position.symbol.strip().upper(): (
-                position.quantity
-                if position.direction is Direction.LONG
-                else -position.quantity
+                position.quantity if position.direction is Direction.LONG else -position.quantity
             )
             for position in portfolio.positions
         }

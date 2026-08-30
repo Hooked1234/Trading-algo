@@ -22,6 +22,7 @@ from .domain import (
     OrderIntent,
     OrderSide,
     PortfolioState,
+    money,
 )
 from .risk import pending_entry_exposures
 
@@ -320,20 +321,17 @@ class StrategyPnLSynchronizer:
                 continue
             entry_quantity = sum(report.filled_quantity for _, report in entry_reports)
             entry_notional = sum(
-                report.average_fill_price * report.filled_quantity
-                for _, report in entry_reports
+                report.average_fill_price * report.filled_quantity for _, report in entry_reports
             )
             if entry_quantity <= 0 or entry_notional <= 0:
                 raise RuntimeError("filled strategy entry has invalid execution economics")
-            entry_average = entry_notional / entry_quantity
+            entry_average = money(entry_notional / entry_quantity)
             entry_fees = sum((report.fees for _, report in entry_reports), Decimal("0"))
-            entry_fee_per_share = entry_fees / entry_quantity
+            entry_fee_per_share = money(entry_fees / entry_quantity)
             entry_side = entries[0].side
             if any(intent.side is not entry_side for intent in entries):
                 raise RuntimeError(f"strategy signal {signal_id} has conflicting entry sides")
-            direction = (
-                Direction.LONG if entry_side is OrderSide.BUY else Direction.SHORT
-            )
+            direction = Direction.LONG if entry_side is OrderSide.BUY else Direction.SHORT
             sign = Decimal("1") if direction is Direction.LONG else Decimal("-1")
             exited_quantity = 0
             for intent in exits:
@@ -342,16 +340,12 @@ class StrategyPnLSynchronizer:
                     continue
                 exited_quantity += report.filled_quantity
                 realized = (
-                    sign
-                    * (report.average_fill_price - entry_average)
-                    * report.filled_quantity
+                    sign * (report.average_fill_price - entry_average) * report.filled_quantity
                     - entry_fee_per_share * report.filled_quantity
                     - report.fees
                 )
                 if report.status in self._TERMINAL:
-                    terminal_realized.append(
-                        (report.occurred_at, intent.order_id, realized)
-                    )
+                    terminal_realized.append((report.occurred_at, intent.order_id, realized))
                 else:
                     temporary_realized += realized
             if exited_quantity > entry_quantity:
@@ -372,9 +366,7 @@ class StrategyPnLSynchronizer:
                     - entry_fee_per_share * remaining
                 )
 
-        actual_positions = {
-            key: position.quantity for key, position in market_positions.items()
-        }
+        actual_positions = {key: position.quantity for key, position in market_positions.items()}
         if expected_positions != actual_positions:
             raise RuntimeError("broker positions contain unowned strategy exposure")
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from hashlib import sha256
 
 from .calendar import NEW_YORK, NyseSessionCalendar
@@ -14,6 +14,7 @@ from .domain import (
     Materiality,
     NewsInsight,
     Signal,
+    money,
 )
 
 RELEVANT_ITEMS = frozenset({"1.01", "2.01", "2.02", "5.02", "7.01", "8.01"})
@@ -70,9 +71,10 @@ class ContinuationStrategy:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("strategy decision time must be timezone-aware")
         if insight is None:
-            return ("INSIGHT_MISSING", *self.quant_rejection_reasons(
-                snapshot, Direction.NEUTRAL, now
-            ))
+            return (
+                "INSIGHT_MISSING",
+                *self.quant_rejection_reasons(snapshot, Direction.NEUTRAL, now),
+            )
         reasons: list[str] = []
         filing = snapshot.filing
         if (
@@ -192,7 +194,6 @@ class QuantOnlyContinuationStrategy(ContinuationStrategy):
     def _direction(snapshot: EventSnapshot) -> Direction:
         return Direction.LONG if snapshot.market.beta_adjusted_return_z >= 0 else Direction.SHORT
 
-
     def rejection_reasons(
         self,
         snapshot: EventSnapshot,
@@ -233,7 +234,7 @@ def _build_signal(
     entry = market.quote.ask if direction is Direction.LONG else market.quote.bid
     stop_offset = market.atr_5m * Decimal("1.5")
     raw_stop = entry - stop_offset if direction is Direction.LONG else entry + stop_offset
-    stop = raw_stop.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+    stop = money(raw_stop)
     event_key = (
         f"{snapshot.filing.event_id}:{market.symbol}:{strategy_version}:"
         f"{direction.value}:{now.isoformat()}"

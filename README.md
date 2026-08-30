@@ -37,7 +37,11 @@ Für den offiziellen IBKR-Adapter zusätzlich `uv sync --extra dev --extra ibkr`
 
 Set `TRADING_SEC_USER_AGENT` locally to a project name and contact address as required by
 the SEC. Never commit `.env`, API keys or account identifiers. Keep the default paper
-port and add the actual `DU...` account to the explicit allowlist before using IBKR.
+port and add the actual `DU<digits>` account to the explicit allowlist before using IBKR.
+
+Paper mode additionally requires `TRADING_IBKR_CLIENT_ID=0`. Only client 0 observes
+manual and API orders in one authoritative scope, so any other value makes `run-paper`
+refuse before it opens a Gateway connection.
 
 ## Operating sequence
 
