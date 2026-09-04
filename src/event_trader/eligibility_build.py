@@ -223,30 +223,37 @@ class CoverPageFactCollector:
 
 
 def read_fact_records(path: str | Path) -> tuple[CoverPageFactRecord, ...]:
-    """Read collected evidence, tolerating exactly one torn trailing line.
+    """Read collected evidence and leave the file safe to append to.
 
-    Only the final line of an append-only file can be truncated by an
-    interrupted run.  That line is dropped and the file is shortened, so the
-    next append starts from a valid record.  A malformed line anywhere else is
-    corruption and is refused.
+    An interrupted run can leave the final line torn, and it can equally leave a
+    complete record without its terminating newline.  Both are repaired here,
+    before the collector appends anything: the torn line is dropped, and a valid
+    but unterminated final record is terminated.  Without that second repair the
+    next append would concatenate onto the last record and destroy two records
+    at once.  A malformed line anywhere but at the end is corruption and is
+    refused rather than silently discarded.
     """
 
     target = Path(path)
     if not target.is_file():
         return ()
-    lines = [line for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+    raw = target.read_text(encoding="utf-8")
+    lines = [line for line in raw.splitlines() if line.strip()]
     records: list[CoverPageFactRecord] = []
+    torn = False
     for index, line in enumerate(lines, 1):
         try:
             records.append(CoverPageFactRecord.model_validate_json(line))
         except ValidationError as exc:
             if index != len(lines):
                 raise ValueError(f"cover-page fact file is corrupt at line {index}") from exc
-            target.write_text(
-                "".join(f"{item.model_dump_json()}\n" for item in records),
-                encoding="utf-8",
-                newline="\n",
-            )
+            torn = True
+    if torn or (raw and not raw.endswith("\n")):
+        target.write_text(
+            "".join(f"{item.model_dump_json()}\n" for item in records),
+            encoding="utf-8",
+            newline="\n",
+        )
     return tuple(records)
 
 

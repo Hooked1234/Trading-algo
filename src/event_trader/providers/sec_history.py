@@ -41,6 +41,7 @@ _ATTRIBUTE_RE = re.compile(rb"([A-Za-z0-9_:.-]+)\s*=\s*[\"']([^\"']*)[\"']")
 _MARKUP_RE = re.compile(rb"<[^>]*>")
 _SAFE_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,31}$")
 _COVER_PAGE_FACT_NAMES = frozenset(fact.casefold() for fact in _COVER_PAGE_FACTS)
+_CLASSIFYING_FACTS = ("security12btitle", "securityexchangename")
 _NO_CONTEXT = ""
 
 
@@ -118,37 +119,34 @@ def parse_cover_page_securities(payload: bytes) -> tuple[CoverPageSecurity, ...]
     for name, context, value in _iter_cover_page_facts(payload):
         contexts.setdefault(context, {}).setdefault(name, value)
 
-    securities: dict[str, CoverPageSecurity] = {}
+    # Every reported value of a symbol is collected before any of them is
+    # accepted.  Merging pairwise would let a later context overwrite an
+    # earlier contradiction, because "not reported" and "reported
+    # contradictorily" are the same absent value once merged.
+    reported: dict[str, dict[str, dict[str, str]]] = {}
     for facts in contexts.values():
         symbol = facts.get("tradingsymbol", "").upper()
         if _SAFE_SYMBOL_RE.fullmatch(symbol) is None:
             continue
-        candidate = CoverPageSecurity(
+        seen = reported.setdefault(symbol, {name: {} for name in _CLASSIFYING_FACTS})
+        for name in _CLASSIFYING_FACTS:
+            value = facts.get(name)
+            if value:
+                seen[name].setdefault(value.casefold(), value)
+    return tuple(
+        CoverPageSecurity(
             symbol=symbol,
-            security_title=facts.get("security12btitle"),
-            exchange=facts.get("securityexchangename"),
+            security_title=_undisputed(seen["security12btitle"]),
+            exchange=_undisputed(seen["securityexchangename"]),
         )
-        existing = securities.get(symbol)
-        securities[symbol] = (
-            candidate if existing is None else _merge_securities(existing, candidate)
-        )
-    return tuple(securities.values())
-
-
-def _merge_securities(first: CoverPageSecurity, second: CoverPageSecurity) -> CoverPageSecurity:
-    return CoverPageSecurity(
-        symbol=first.symbol,
-        security_title=_agree(first.security_title, second.security_title),
-        exchange=_agree(first.exchange, second.exchange),
+        for symbol, seen in reported.items()
     )
 
 
-def _agree(first: str | None, second: str | None) -> str | None:
-    """Keep a fact only while every context that reports it agrees."""
+def _undisputed(values: dict[str, str]) -> str | None:
+    """Keep a fact only when every context that reported it agreed."""
 
-    if first is None or second is None:
-        return first if second is None else second
-    return first if first.casefold() == second.casefold() else None
+    return next(iter(values.values())) if len(values) == 1 else None
 
 
 def _iter_cover_page_facts(payload: bytes) -> Iterator[tuple[str, str, str]]:

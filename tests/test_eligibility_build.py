@@ -12,6 +12,7 @@ from event_trader.eligibility_build import (
     CoverPageFactCollector,
     CoverPageFactRecord,
     CoverPageSecurityRecord,
+    _append_record,
     build_eligibility_intervals,
     classify_common_stock,
     classify_us_listing,
@@ -112,6 +113,24 @@ def test_symbol_reported_with_conflicting_titles_keeps_the_fact_unknown() -> Non
         b'<dei:Security12bTitle contextRef="c1">Common Stock</dei:Security12bTitle>'
         b'<dei:TradingSymbol contextRef="c2">AAPL</dei:TradingSymbol>'
         b'<dei:Security12bTitle contextRef="c2">Warrants</dei:Security12bTitle>'
+    )
+
+    (security,) = parse_cover_page_securities(payload)
+
+    assert security.symbol == "AAPL"
+    assert security.security_title is None
+    assert classify_common_stock(security.security_title) is None
+
+
+def test_a_contradiction_survives_every_later_agreeing_context() -> None:
+    # Three contexts for one symbol, the middle one contradicting. Merging the
+    # facts pairwise would let the third context overwrite the conflict, and the
+    # outcome would depend on the order the filing happens to tag them in.
+    payload = (
+        b"<ACCEPTANCE-DATETIME>20240702101530\n"
+        + _registered_class(b"c1", b"AAPL", b"Common Stock")
+        + _registered_class(b"c2", b"AAPL", b"Warrants")
+        + _registered_class(b"c3", b"AAPL", b"Common Stock")
     )
 
     (security,) = parse_cover_page_securities(payload)
@@ -337,6 +356,44 @@ def test_read_fact_records_drops_and_truncates_one_torn_trailing_line(tmp_path: 
     # reading: the next append would otherwise concatenate onto it and corrupt
     # both records.
     assert path.read_text(encoding="utf-8") == complete.model_dump_json() + "\n"
+
+
+def test_a_complete_but_unterminated_record_is_terminated_before_appending(
+    tmp_path: Path,
+) -> None:
+    # An interrupted run can also stop after a complete JSON object but before
+    # its newline. Reading has to terminate it, or the next append concatenates
+    # onto it and both records are lost as one malformed final line.
+    path = tmp_path / "facts.jsonl"
+    first = _record(
+        accepted_at=datetime(2024, 1, 10, 14, 0, tzinfo=UTC),
+        securities=(_common(),),
+    )
+    second = _record(
+        accession="0000320193-24-000002",
+        accepted_at=datetime(2024, 1, 11, 14, 0, tzinfo=UTC),
+        securities=(_common(),),
+    )
+    third = _record(
+        accession="0000320193-24-000003",
+        accepted_at=datetime(2024, 1, 12, 14, 0, tzinfo=UTC),
+        securities=(_common(),),
+    )
+    path.write_text(
+        first.model_dump_json() + "\n" + second.model_dump_json(),
+        encoding="utf-8",
+    )
+
+    assert len(read_fact_records(path)) == 2
+    assert path.read_text(encoding="utf-8").endswith("}\n")
+
+    _append_record(path, third)
+
+    assert [record.accession_number for record in read_fact_records(path)] == [
+        first.accession_number,
+        second.accession_number,
+        third.accession_number,
+    ]
 
 
 def test_read_fact_records_refuses_corruption_before_the_last_line(tmp_path: Path) -> None:

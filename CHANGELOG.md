@@ -105,6 +105,12 @@
 - Indexed `CsvEligibilityResolver` by CIK and symbol. It scanned every interval on every
   lookup, which a full backfill would have turned into a quadratic cost against a
   manifest carrying one row per registered class.
-- Now 532 deterministic, contract, property, replay and recovery tests with 83.25 %
+- Kept a contradicted cover-page fact unknown across every later agreeing context. The
+  facts were merged pairwise, so a third context could overwrite an earlier conflict and
+  the outcome depended on the order the filing tagged its classes in.
+- Terminated a complete but unterminated final record before appending to the collected
+  evidence. An interruption between a record and its newline made the next append
+  concatenate onto it, and the torn-line recovery then discarded both records at once.
+- Now 534 deterministic, contract, property, replay and recovery tests with 83.26 %
   branch coverage, `ruff check` and `ruff format` clean. Every new rule is
-  mutation-checked: nine reverted rules, each colouring at least one test red.
+  mutation-checked: ten reverted rules, each colouring at least one test red.

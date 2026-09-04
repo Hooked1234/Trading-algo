@@ -74,6 +74,23 @@ Gate D, erster Schritt — Eligibility aus der Cover Page:
 - Qualitätslauf: 532 Tests grün, 83,25 % Branch-Coverage, `ruff check` und
   `ruff format` sauber.
 
+Review-Nacharbeit am selben Tag (zwei bestätigte P1-Befunde aus dem PR):
+
+- Cover-Page-Fakten wurden paarweise gemischt. Bei drei Kontexten zum selben Symbol
+  überschrieb ein späterer, zustimmender Kontext einen früheren Widerspruch, weil
+  „nicht gemeldet“ und „widersprüchlich gemeldet“ nach dem Mischen derselbe leere
+  Wert sind. Titel Common Stock / Warrants / Common Stock ergab Common Stock statt
+  unbekannt — reproduziert, nicht vermutet. Jetzt werden erst alle gemeldeten Werte je
+  Symbol gesammelt und nur ein einziger, unbestrittener übernommen; das Ergebnis hängt
+  nicht mehr von der Tag-Reihenfolge des Filings ab.
+- Ein Abbruch nach dem vollständigen JSON-Objekt, aber vor dem Zeilenumbruch, war nicht
+  abgedeckt: der nächste Append hängte direkt an den letzten Record an, und die
+  Torn-Line-Rettung verwarf die verschmolzene Zeile — also zwei Records still verloren,
+  schwerer als im Review beschrieben. `read_fact_records` terminiert einen gültigen,
+  unterminierten Schluss-Record jetzt, bevor der Collector irgendetwas anhängt.
+- Zehn Mutationsproben, alle rot. Qualitätslauf: 534 Tests grün, 83,26 %
+  Branch-Coverage, Ruff sauber.
+
 Offen und ausdrücklich nicht geschlossen: die dritte Eligibility-Spalte braucht eine
 auditierbare Kapitalmaßnahmen-Quelle, und der Erzeuger für das Trading-State-Manifest
 steht noch aus. Ohne beides liefert die Kette weiterhin null Research-Cases.
