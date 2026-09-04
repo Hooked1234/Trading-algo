@@ -50,6 +50,14 @@ from .domain import (
     TradeResult,
 )
 from .eligibility import CsvEligibilityResolver
+from .eligibility_build import (
+    CoverPageFactCollector,
+    build_eligibility_intervals,
+    observations_from_record,
+    read_fact_records,
+    summarize,
+    write_eligibility_manifest,
+)
 from .insights import InsightArtifact, build_insight_artifact
 from .labels import ReferenceLabel, ScoredPrediction, benchmark_predictions
 from .promotion import (
@@ -348,6 +356,77 @@ def _load_trading_state_manifest(path: Path) -> TradingStateManifest:
         return manifest.sealed()
     manifest.verify()
     return manifest
+
+
+async def _collect_cover_page_facts(start: date, end: date, output: Path) -> object:
+    settings = Settings()
+    if start < BACKFILL_START or end > BACKFILL_END:
+        raise typer.BadParameter(f"registered v1 range is {BACKFILL_START} through {BACKFILL_END}")
+    if "example.invalid" in settings.sec_user_agent:
+        raise typer.BadParameter("Configure TRADING_SEC_USER_AGENT before contacting SEC.")
+
+    sec_config = SecProviderConfig(
+        user_agent=settings.sec_user_agent,
+        requests_per_second=settings.sec_max_requests_per_second,
+    )
+    async with SecProvider(sec_config) as sec:
+
+        async def fetch_index(url: str) -> bytes:
+            return await sec.fetch_archive(url, max_bytes=sec_config.max_index_bytes)
+
+        async def fetch_submission(url: str) -> bytes:
+            return await sec.fetch_archive(url, max_bytes=sec_config.max_document_bytes)
+
+        collector = CoverPageFactCollector(
+            index_fetcher=fetch_index,
+            submission_fetcher=fetch_submission,
+        )
+        return await collector.run(start=start, end=end, output=output)
+
+
+@app.command("collect-cover-page-facts")
+def collect_cover_page_facts(
+    output: Annotated[Path, typer.Option(dir_okay=False)],
+    start: Annotated[str, typer.Option(help="Inclusive ISO date")] = str(BACKFILL_START),
+    end: Annotated[str, typer.Option(help="Inclusive ISO date")] = str(BACKFILL_END),
+) -> None:
+    """Collect Section 12(b) cover-page evidence for every 8-K in the range.
+
+    SEC only: one submission request per filing, appended durably, resumable.
+    Re-run the command until ``failed`` stops changing before building the
+    manifest from the result.
+    """
+
+    _print_model(
+        asyncio.run(
+            _collect_cover_page_facts(
+                _parse_iso_date(start, "start"),
+                _parse_iso_date(end, "end"),
+                output,
+            )
+        )
+    )
+
+
+@app.command("build-eligibility-manifest")
+def build_eligibility_manifest_command(
+    facts: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    output: Annotated[Path, typer.Option(dir_okay=False)],
+) -> None:
+    """Derive the point-in-time eligibility manifest from collected cover pages.
+
+    Offline and deterministic.  ``corporate_actions_complete`` stays unset: no
+    cover page establishes it, and every interval therefore remains an explicit
+    coverage gap until an auditable corporate-action source fills that column.
+    """
+
+    records = read_fact_records(facts)
+    observations = tuple(
+        observation for record in records for observation in observations_from_record(record)
+    )
+    intervals = build_eligibility_intervals(observations)
+    write_eligibility_manifest(intervals, output)
+    _print_model(summarize(records, observations, intervals))
 
 
 @app.command("build-dataset-manifest")

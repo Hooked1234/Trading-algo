@@ -55,7 +55,16 @@ are part of the data-quality gate, not setup assumptions.
 
 ## Reproducible evidence chain
 
-Every gate decision is reconstructed from hashed artifacts, in this order:
+The backfill needs point-in-time eligibility before it runs; without it every coverage
+record is a gap and no case is ever built. The manifest is derived from the Section 12(b)
+cover page of the filings themselves (ADR-028):
+
+```bash
+event-trader collect-cover-page-facts --output cover-page-facts.jsonl
+event-trader build-eligibility-manifest cover-page-facts.jsonl --output historical_eligibility.csv
+```
+
+Every gate decision is then reconstructed from hashed artifacts, in this order:
 
 ```bash
 event-trader build-dataset-manifest <lake> --output dataset.json

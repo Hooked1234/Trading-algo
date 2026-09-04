@@ -77,11 +77,14 @@ class CsvEligibilityResolver:
         self._records = tuple(
             self._parse_row(row, line=index) for index, row in enumerate(reader, 2)
         )
-        self._validate_non_overlapping()
+        self._by_symbol = self._validate_non_overlapping()
 
     def __call__(self, event: FilingEvent, symbol: str) -> PointInTimeEligibility | None:
         normalized = symbol.strip().upper()
-        matches = tuple(record for record in self._records if record.applies(event, normalized))
+        # A full backfill resolves this per filing and symbol, so the candidate
+        # set is narrowed by CIK and symbol before the point-in-time predicate.
+        candidates = self._by_symbol.get((_cik_key(event.cik), normalized), ())
+        matches = tuple(record for record in candidates if record.applies(event, normalized))
         if not matches:
             return None
         if len(matches) != 1:
@@ -103,10 +106,11 @@ class CsvEligibilityResolver:
             ),
         )
 
-    def _validate_non_overlapping(self) -> None:
+    def _validate_non_overlapping(self) -> dict[tuple[str, str], tuple[EligibilityInterval, ...]]:
         grouped: dict[tuple[str, str], list[EligibilityInterval]] = {}
         for record in self._records:
-            grouped.setdefault((record.cik.lstrip("0"), record.symbol), []).append(record)
+            grouped.setdefault((_cik_key(record.cik), record.symbol), []).append(record)
+        indexed: dict[tuple[str, str], tuple[EligibilityInterval, ...]] = {}
         for key, records in grouped.items():
             ordered = sorted(records, key=lambda record: record.valid_from)
             for previous, current in pairwise(ordered):
@@ -114,6 +118,8 @@ class CsvEligibilityResolver:
                     raise EligibilityManifestError(
                         f"overlapping eligibility intervals for CIK {key[0]} symbol {key[1]}"
                     )
+            indexed[key] = tuple(ordered)
+        return indexed
 
     @staticmethod
     def _parse_row(row: Mapping[str, str | None], *, line: int) -> EligibilityInterval:
@@ -137,6 +143,10 @@ class CsvEligibilityResolver:
             raise EligibilityManifestError(
                 f"invalid eligibility manifest row at line {line}: {exc}"
             ) from exc
+
+
+def _cik_key(value: str) -> str:
+    return value.lstrip("0")
 
 
 def _required(row: Mapping[str, str | None], field: str) -> str:
