@@ -91,5 +91,20 @@
   the exit path, where only the guard can produce them.
 - Recorded the callback fault latch and the single `money()` normalization as ADR-026
   and ADR-027, and completed ADR-023 with the shared mandatory readiness set.
-- Now 501 deterministic, contract, property, replay and recovery tests with 82.88 %
-  branch coverage, `ruff check` and `ruff format` clean.
+- Added `collect-cover-page-facts` and `build-eligibility-manifest`: the point-in-time
+  eligibility manifest is now derived from the Section 12(b) cover page of the filings
+  themselves instead of being hand-filled from a security master the project does not
+  have (ADR-028). Collection is SEC-only, appends one durable line per filing and
+  resumes after an interruption; derivation is offline, deterministic and never
+  overwrites an existing manifest.
+- Grouped cover-page facts by XBRL context, so a filer with several registered classes
+  cannot have the common-stock title of one class attributed to the symbol of another.
+  A unit or warrant whose own title names common stock is classified as non-common.
+- Left `corporate_actions_complete` unset in every derived interval. No cover page
+  establishes it, so the affected coverage stays an explicit gap, never a silent pass.
+- Indexed `CsvEligibilityResolver` by CIK and symbol. It scanned every interval on every
+  lookup, which a full backfill would have turned into a quadratic cost against a
+  manifest carrying one row per registered class.
+- Now 532 deterministic, contract, property, replay and recovery tests with 83.25 %
+  branch coverage, `ruff check` and `ruff format` clean. Every new rule is
+  mutation-checked: nine reverted rules, each colouring at least one test red.

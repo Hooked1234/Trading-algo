@@ -1,5 +1,82 @@
 # Worklog
 
+## 2026-08-31
+
+Weiteres Vorgehen geplant und Gate D begonnen (Erzeuger für die fehlenden
+Punkt-in-Zeit-Manifeste).
+
+- Ausgangslage im Worktree verifiziert statt übernommen: 501 Tests grün,
+  `backfill-plan` läuft offline und meldet 30 Quartale 2019-Q1 bis 2026-Q2.
+- Befund der Planung: Die Forschungskette ist nicht zuerst durch Konten oder
+  Abonnements blockiert, sondern durch zwei Referenzdatensätze, die der Code
+  zwingend verlangt und für die es keinen Erzeuger gab. Beide fehlten in
+  `NEXT_STEPS.md`.
+  1. Ohne `historical_eligibility.csv` ist der Eligibility-Resolver `None`, jede
+     Coverage-Zeile wird `MISSING_POINT_IN_TIME_ELIGIBILITY` und
+     `build-research-cases` schließt jeden Case aus. Verschärfend: der Backfill
+     löst Eligibility erst *nach* dem Marktdatenabruf auf, ein Lauf ohne Manifest
+     verbraucht also das gesamte Alpaca-Budget und liefert trotzdem keine
+     handelbare Coverage.
+  2. `TradingStateManifest` wird im ganzen Repo nur gelesen, nie gebaut, ist aber
+     Pflichtargument von `build-research-cases`. Unbekannter Halt-Status schließt
+     den Case aus, und `as_of` darf höchstens fünf Sekunden vor dem
+     Entscheidungszeitpunkt liegen — also ein Eintrag je Symbol und
+     Entscheidungsinstant, keine pflegbare Referenzdatei.
+- Reihenfolge in `NEXT_STEPS.md` festgeschrieben: Gate D (Manifest-Erzeuger, ohne
+  externe Konten) vor Gate E (Backfill, Alpaca kostenpflichtig) vor Gate F
+  (Forschungsentscheid, quant-only zuerst) vor Gate G (IBKR-Abnahme). Alle teuren
+  Posten liegen damit hinter dem Entscheidungspunkt.
+
+Gate D, erster Schritt — Eligibility aus der Cover Page:
+
+- Quelle ist das Filing selbst. Seit der Cover-Page-Tagging-Einfuehrung 2019 trägt
+  ein 8-K `Security12bTitle`, `TradingSymbol` und `SecurityExchangeName` je nach
+  Section 12(b) registrierter Gattung. Die Evidenz ist zum Acceptance-Zeitpunkt
+  bekannt, braucht keinen heutigen Security Master, und ihre Abdeckung beginnt genau
+  dort, wo der registrierte Sample-Bereich beginnt (ADR-028).
+- `sec_history.py` gruppiert Cover-Page-Fakten jetzt über `contextRef`. Vorher
+  wurden nur Symbole flach eingesammelt; ohne Kontextbindung hätte ein SPAC mit
+  Aktie, Unit und Warrant den Titel der einen Gattung dem Symbol der anderen
+  zugeordnet. Widersprechen sich zwei Kontexte zum selben Symbol, bleibt die
+  Tatsache unbekannt statt willkuerlich gewählt.
+- Neue Klassifikation prueft Nicht-Stammaktien-Marker *vor* den Stammaktien-Markern:
+  "Units, each consisting of one share of Class A common stock and one-half of one
+  warrant" nennt Stammaktien im eigenen Titel und wäre sonst als Stammaktie in die
+  Stichprobe gelaufen.
+- Eine unbekannte Börsenbezeichnung wird `unknown`, nicht `false`. Das Feld ist
+  Freitext; eine Schreibweise, die die Liste nicht kennt, ist kein Beleg für eine
+  ausländische Notierung. Beides schließt aus, aber die Buchhaltung unterscheidet
+  fehlende von widerlegter Evidenz.
+- `corporate_actions_complete` bleibt bewusst leer. Keine Cover Page belegt die
+  Vollständigkeit der Kapitalmaßnahmen-Historie; die Spalte zu füllen, damit ein
+  Backtest läuft, wäre genau der erfundene Wert, den das Forschungsprotokoll
+  verbietet. Jedes abgeleitete Intervall bleibt damit eine ausgewiesene
+  Coverage-Lücke — ehrlich, aber noch ohne Research-Cases.
+- Zwei Kommandos statt einem: `collect-cover-page-facts` ist der einzige mit
+  Netzzugriff, schreibt je Filing eine dauerhafte Zeile und ist wiederaufnehmbar;
+  ein gescheitertes Filing wird bewusst nicht geschrieben, damit ein späterer Lauf
+  es erneut versucht statt einen Transportfehler ins Manifest einzufrieren.
+  `build-eligibility-manifest` ist offline, deterministisch und überschreibt nie.
+- Altlast mitkorrigiert: `CsvEligibilityResolver` scannte je Abfrage alle Intervalle.
+  Bei einem Manifest mit einer Zeile je registrierter Gattung und einer Abfrage je
+  Filing wäre das quadratisch geworden. Der Lookup ist jetzt nach CIK und Symbol
+  indiziert; die Nicht-Überlappungsprüfung baut denselben Index auf.
+- Neun Mutationsproben, alle rot: vertauschte Klassifikationsreihenfolge, behauptete
+  Kapitalmaßnahmen-Vollständigkeit, um einen Tag verschobenes Intervallende,
+  Willkürauswahl bei Tageskonflikt, überschreibendes Schreiben, Verlust des
+  Wiederaufnahme-Zustands, nicht gekürzte abgerissene Zeile, kontextloses Mischen
+  der Gattungen, unnormalisierter CIK im neuen Index.
+- Dabei fielen zuerst zwei überlebende Mutationen auf, beide wegen zu schwacher
+  Zusicherungen in meinen eigenen Tests: die Prüfung auf die gekürzte Datei zählte
+  nur Zeilenumbrüche (die abgerissene Zeile hat keinen), und die
+  Wiederaufnahme-Mutation war innerhalb eines Laufs verhaltensgleich. Beide Tests
+  sind nachgeschärft.
+- Qualitätslauf: 532 Tests grün, 83,25 % Branch-Coverage, `ruff check` und
+  `ruff format` sauber.
+
+Offen und ausdrücklich nicht geschlossen: die dritte Eligibility-Spalte braucht eine
+auditierbare Kapitalmaßnahmen-Quelle, und der Erzeuger für das Trading-State-Manifest
+steht noch aus. Ohne beides liefert die Kette weiterhin null Research-Cases.
 ## 2026-08-28
 
 Gate C — IBKR-Paper-Execution-Härtung, Etappe 1 (Verträge und Persistenz):

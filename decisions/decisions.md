@@ -297,3 +297,30 @@ refused, never rounded into something plausible.
 The rule is deliberately narrow: `money()` never accepts a value the model would have
 rejected, so it moves an existing refusal earlier and gives it a clearer cause. It does
 not create a new failure mode.
+
+## ADR-028 — Point-in-time eligibility is derived from the filing's own cover page
+
+Status: accepted, 2026-08-31.
+
+`CsvEligibilityResolver` needs evidence that was public no later than the filing it
+classifies, and until now no component produced it. Without the manifest every coverage
+record becomes `MISSING_POINT_IN_TIME_ELIGIBILITY` and the research gate has no cases to
+evaluate at all, so this was the first blocker on the path to a gate decision.
+
+The source is the filing itself. Since the 2019 cover-page tagging phase-in, an 8-K
+carries `Security12bTitle`, `TradingSymbol` and `SecurityExchangeName` for every class
+registered under Section 12(b). That evidence is knowable at acceptance, it needs no
+present-day security master, and its coverage begins exactly where the registered sample
+does. The facts are grouped by XBRL context, so a filer with several registered classes
+cannot have the common-stock title of one class attributed to the symbol of another.
+
+Two of the three confirmations follow from it. `corporate_actions_complete` does not:
+nothing on a cover page establishes that a symbol's corporate-action history is complete.
+That column therefore stays unset and every derived interval remains an explicit coverage
+gap. Filling it to make a backtest run would be exactly the invented value the research
+protocol forbids; it needs its own auditable source.
+
+Collection and derivation are separate commands. `collect-cover-page-facts` is the only
+one that touches the network, appends one durable line per filing and is resumable across
+a multi-hour run; `build-eligibility-manifest` is offline and deterministic, so the
+classification rules can be re-run over collected evidence without refetching it.

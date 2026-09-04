@@ -18,10 +18,31 @@ holdout filings while changing prompts or rules.
 
 ## Historical eligibility manifest
 
-Copy `historical_eligibility.example.csv` to `historical_eligibility.csv` only after
-populating it from an authoritative, auditable historical security master. Each row is
-matched by CIK, symbol and inclusive validity dates. `known_at` is the timestamp at which
-the classification evidence was publicly knowable and must not be later than the filing.
+`historical_eligibility.csv` is generated, not hand-filled. The filing's own Section 12(b)
+cover page is the authoritative point-in-time source, and two commands derive the manifest
+from it (ADR-028):
+
+```bash
+uv run event-trader collect-cover-page-facts --output data/reference/cover-page-facts.jsonl
+```
+
+```bash
+uv run event-trader build-eligibility-manifest data/reference/cover-page-facts.jsonl --output data/reference/historical_eligibility.csv
+```
+
+The first command is the only one that contacts SEC. It appends one durable line per
+filing and is resumable, so an interrupted multi-hour run continues where it stopped;
+re-run it until the reported `failed` count stops changing. The second is offline and
+deterministic, and it refuses to overwrite an existing manifest.
+
+`corporate_actions_complete` is deliberately left blank: no cover page establishes that a
+symbol's corporate-action history is complete, so every derived interval stays an explicit
+coverage gap until an auditable corporate-action source fills that column. Do not fill it
+by hand to make a backtest run.
+
+Each row is matched by CIK, symbol and inclusive validity dates. `known_at` is the
+timestamp at which the classification evidence was publicly knowable and must not be later
+than the filing. `historical_eligibility.example.csv` documents the exact header.
 
 The three confirmation columns accept `true`, `false`, `unknown` or blank. Unknown or
 missing rows remain explicit coverage gaps. Current index membership is not acceptable
